@@ -585,7 +585,7 @@ function takePickup(pk) {
   if (!refill) {
     introSeq += 1;
     introKind = name === 'rockets' ? 2 : name === 'shield' ? 3 : 1;
-    introUntil = performance.now() + 1800;
+    introUntil = performance.now() + 900; // (the showcase lasts 0.9 s)
   }
 }
 
@@ -1163,6 +1163,7 @@ function onKill(k) {
 
 // --- HUD (the scoreboard; the bar itself is drawn by the overlay) -------------------------------
 let boardT = 0;
+let boardRect = null;
 function updateBoard(dt) {
   bannerT -= dt;
   if (bannerT <= 0) banner.classList.remove('show');
@@ -1178,6 +1179,7 @@ function updateBoard(dt) {
   const shown = rows.slice(0, BOARD_ROWS);
   const mine = rows.find((r) => r.me);
   if (mine.rank > BOARD_ROWS) shown.push(mine);
+  boardRect = board.getBoundingClientRect();
   $('#boardList').innerHTML = shown.map((r) =>
     `<li class="${r.rank === 1 ? 'first' : ''} ${r.me ? 'me' : ''}"><span class="rank">${r.rank === 1 ? '★' : r.rank}</span>` +
     `<span class="name">${esc(r.name)}${r.me ? ' (YOU)' : ''}</span><span class="pts">${r.score}</span></li>`).join('');
@@ -1200,10 +1202,17 @@ function updateTags() {
     } else {
       r.tag.style.display = 'none';
       r.arrow.style.display = r.dead ? 'none' : '';
+      // on the screen's edge toward them, kept off the score table and the HUD bar
       const cx = view.sw / 2, cy = view.sh / 2;
       const a = Math.atan2(y - cy, x - cx);
       const s = Math.min((cx - m) / Math.abs(Math.cos(a) || 1e-6), (cy - m) / Math.abs(Math.sin(a) || 1e-6));
-      r.arrow.style.transform = `translate(${cx + Math.cos(a) * s}px, ${cy + Math.sin(a) * s}px) rotate(${a + Math.PI / 2}rad)`;
+      let ax = cx + Math.cos(a) * s, ay = cy + Math.sin(a) * s;
+      ay = Math.min(ay, view.sh - 90);
+      const br = boardRect;
+      if (br && ax > br.left - 16 && ay < br.bottom + 16) {
+        if (Math.abs(Math.sin(a)) > 0.7) ax = Math.min(ax, br.left - 20); else ay = br.bottom + 22;
+      }
+      r.arrow.style.transform = `translate(${ax}px, ${ay}px) rotate(${a + Math.PI / 2}rad)`;
     }
   }
 }
@@ -1276,19 +1285,20 @@ function selectRow(i) {
   else if (document.activeElement === nameInput) nameInput.blur();
 }
 
-// The menu bends like the solo game's (GFX.menuBend): each column stretched up and down about the
-// middle by 1 + 0.34 (1 - u)^2, u across the menu - its left end the tallest. An SVG displacement
-// map does the stretch, so the menu stays real, clickable HTML.
-function bendMenu() {
-  const panel = $('.menu-panel');
-  const img = $('#bendMap');
-  const fe = $('#bendFilter');
-  if (!panel || !img || !fe) return;
-  if (matchMedia('(max-width: 760px)').matches) { panel.style.filter = 'none'; return; }
-  const w = panel.offsetWidth, h = panel.offsetHeight;
+// Curved panels, like the solo game's (GFX.menuBend, drawPanel): each column stretched up and down
+// about the middle by 1 + curve (1 - u)^2, u running from the tall end. An SVG displacement map does
+// the stretch, so the panel stays real, clickable HTML. tallLeft: which end is the tall one.
+function bendEl(el, id, curve, tallLeft) {
+  const img = document.getElementById(id + 'Map');
+  const fe = document.getElementById(id);
+  const disp = document.getElementById(id + 'Disp');
+  if (!el || !img || !fe || !disp) return;
+  const w = el.offsetWidth, h = el.offsetHeight;
   if (!w || !h) return;
-  const CURVE = 0.34;
-  const top = -h * 0.25, H = h * 1.5; // the region: room for the taller left end
+  const key = `${w}x${h}`;
+  if (el.dataset.bent === key) return;
+  el.dataset.bent = key;
+  const top = -h * 0.25, H = h * 1.5; // the region: room for the taller end
   const scale = h * 0.5;
   const cw = Math.max(2, Math.round(w / 2)), ch = Math.max(2, Math.round(H / 2));
   const cv = document.createElement('canvas');
@@ -1297,11 +1307,11 @@ function bendMenu() {
   const data = g.createImageData(cw, ch);
   const yc = h / 2;
   for (let i = 0; i < cw; i++) {
-    const u = i / (cw - 1);
-    const s = 1 + CURVE * (1 - u) * (1 - u);
+    const u = tallLeft ? i / (cw - 1) : 1 - i / (cw - 1);
+    const s = 1 + curve * (1 - u) * (1 - u);
     for (let j = 0; j < ch; j++) {
-      const y = top + (j / (ch - 1)) * H; // element y
-      const dy = (y - yc) * (1 / s - 1); // sample from here
+      const y = top + (j / (ch - 1)) * H;
+      const dy = (y - yc) * (1 / s - 1);
       const o = (j * cw + i) * 4;
       data.data[o] = 128;
       data.data[o + 1] = clamp(Math.round(128 + (dy / scale) * 255), 0, 255);
@@ -1310,12 +1320,23 @@ function bendMenu() {
     }
   }
   g.putImageData(data, 0, 0);
-  fe.setAttribute('x', 0); fe.setAttribute('y', top); fe.setAttribute('width', w); fe.setAttribute('height', H);
+  for (const n of [fe, img]) {
+    n.setAttribute('x', 0); n.setAttribute('y', top); n.setAttribute('width', w); n.setAttribute('height', H);
+  }
   img.setAttribute('href', cv.toDataURL());
-  img.setAttribute('x', 0); img.setAttribute('y', top); img.setAttribute('width', w); img.setAttribute('height', H);
-  $('#bendMapDisp').setAttribute('scale', scale);
-  panel.style.filter = 'url(#bendFilter)';
+  disp.setAttribute('scale', scale);
+  el.style.filter = `url(#${id})`;
 }
+
+// the menu: its left end the tallest (MENU.curve 0.34)
+function bendMenu() {
+  const panel = $('.menu-panel');
+  if (matchMedia('(max-width: 760px)').matches) { panel.style.filter = 'none'; panel.dataset.bent = ''; return; }
+  bendEl(panel, 'bendFilter', 0.34, true);
+}
+// the score table: its outer (right) end the tallest, like a panel beside the plane (PANEL_CURVE 0.3)
+const board = $('.board');
+new ResizeObserver(() => bendEl(board, 'bendBoard', 0.3, false)).observe(board);
 
 rowsEl.forEach((r, i) => r.addEventListener('pointerenter', () => { if (phase === 'menu') selectRow(i); }));
 nameInput.addEventListener('focus', () => selectRow(0));

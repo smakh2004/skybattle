@@ -8,7 +8,7 @@
   <link rel="icon" href="data:," />
   <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
        browsers load the new files at once instead of a cached copy -->
-  <link rel="stylesheet" href="css/style.css?v=8" />
+  <link rel="stylesheet" href="css/style.css?v=9" />
   <script>
     // Static hosting cannot send the cross-origin isolation headers Rive needs for its threads;
     // coi-sw.js adds them. The first visit installs it and reloads once (never in a loop).
@@ -100,8 +100,12 @@
          middle, its left end tallest, like the solo game's GFX.menuBend -->
     <svg width="0" height="0" style="position:absolute" aria-hidden="true">
       <filter id="bendFilter" filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-        <feImage id="bendMap" preserveAspectRatio="none" result="map" />
-        <feDisplacementMap id="bendMapDisp" in="SourceGraphic" in2="map" scale="0" xChannelSelector="R" yChannelSelector="G" />
+        <feImage id="bendFilterMap" preserveAspectRatio="none" result="map" />
+        <feDisplacementMap id="bendFilterDisp" in="SourceGraphic" in2="map" scale="0" xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+      <filter id="bendBoard" filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+        <feImage id="bendBoardMap" preserveAspectRatio="none" result="map" />
+        <feDisplacementMap id="bendBoardDisp" in="SourceGraphic" in2="map" scale="0" xChannelSelector="R" yChannelSelector="G" />
       </filter>
     </svg>
 
@@ -109,6 +113,6 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js?v=8"></script>
+  <script type="module" src="js/main.js?v=9"></script>
 </body>
 </html>

@@ -8,7 +8,20 @@
   <link rel="icon" href="data:," />
   <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
        browsers load the new files at once instead of a cached copy -->
-  <link rel="stylesheet" href="css/style.css?v=6" />
+  <link rel="stylesheet" href="css/style.css?v=7" />
+  <script>
+    // Static hosting cannot send the cross-origin isolation headers Rive needs for its threads;
+    // coi-sw.js adds them. The first visit installs it and reloads once (never in a loop).
+    (function () {
+      if (window.crossOriginIsolated || !window.isSecureContext || !('serviceWorker' in navigator)) return;
+      if (/^(localhost|127\.)/.test(location.hostname)) return; // serve.py already sends them
+      navigator.serviceWorker.register('coi-sw.js').then(function () {
+        if (sessionStorage.getItem('coi-reloaded')) return;
+        sessionStorage.setItem('coi-reloaded', '1');
+        navigator.serviceWorker.ready.then(function () { location.reload(); });
+      }).catch(function (e) { console.warn('coi-sw', e); });
+    })();
+  </script>
 </head>
 <body>
   <main id="stage" data-phase="menu">
@@ -99,6 +112,6 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js?v=6"></script>
+  <script type="module" src="js/main.js?v=7"></script>
 </body>
 </html>

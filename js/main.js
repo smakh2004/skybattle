@@ -52,6 +52,23 @@ const PLANES = {
 const STAT_MAX = { hp: 150, speed: 1.08, fire: 85 }; // for the menu's meters
 
 const PLANE_ARTBOARD = 320; // planes.riv's artboard size (units)
+
+// Quality: 2 high, 1 medium, 0 low. It starts high (or where this computer settled last time) and
+// steps down by itself when frames take too long. Soft layers (sea, clouds, smoke, bullet glow)
+// never render above 1 pixel per css px - extra sharpness there costs a lot and shows nothing.
+const QUALITY = [
+  { world: 0.6, planes: 1, detail: 0, smoke: 0.4 }, // low
+  { world: 0.8, planes: 1.25, detail: 0.5, smoke: 0.7 }, // medium
+  { world: 1, planes: 1.5, detail: 1, smoke: 1 }, // high
+];
+let qLevel = 2;
+try {
+  const saved = localStorage.getItem('skyblitz.quality');
+  if (saved !== null && +saved >= 0 && +saved <= 2) qLevel = +saved;
+} catch {}
+const Q = () => QUALITY[qLevel];
+const worldDpr = () => Math.min(devicePixelRatio || 1, 1) * Q().world;
+const planeDpr = () => Math.min(devicePixelRatio || 1, Q().planes);
 const BULLET_LIFE = 1.4; // s
 // the arena's radius in world units (past it the plane is turned back toward the battle); it grows
 // with the number of players so a crowd still has room
@@ -166,7 +183,13 @@ class PlaneView {
   setSize(px) {
     this.size = px;
     this.canvas.style.width = this.canvas.style.height = px + 'px';
-    if (this.r) this.r.resizeDrawingSurfaceToCanvas();
+    if (this.r) this.r.resizeDrawingSurfaceToCanvas(planeDpr());
+  }
+  /** Stop / restart drawing (a hidden plane costs nothing). */
+  active(on) {
+    if (!this.r || this.on === on) return;
+    this.on = on;
+    if (on) this.r.startRendering(); else this.r.stopRendering();
   }
   pose(p) {
     this.num('plane', p.plane);
@@ -542,7 +565,7 @@ function updateSmoke(dt) {
     if (!(p.burning && !p.dead) && !falling) { p.smokeT = 0; continue; }
     p.smokeT = (p.smokeT || 0) - dt;
     while (p.smokeT <= 0) {
-      p.smokeT += SMOKE.every * (falling ? 1.6 : 1); // a falling plane hardly moves: fewer puffs
+      p.smokeT += (SMOKE.every / Q().smoke) * (falling ? 1.6 : 1); // a falling plane hardly moves: fewer puffs
       const spots = FIRE[p.plane] || FIRE[1];
       const [fx, fy] = spots[Math.floor(Math.random() * spots.length)];
       const c = Math.cos(p.heading), sn = Math.sin(p.heading);
@@ -564,7 +587,8 @@ function updateSmoke(dt) {
     pf.y += pf.vy * dt;
     if (pf.t > pf.life) smoke.splice(i, 1);
   }
-  if (smoke.length > SMOKE.max) smoke.splice(0, smoke.length - SMOKE.max);
+  const cap = Math.round(SMOKE.max * Q().smoke);
+  if (smoke.length > cap) smoke.splice(0, smoke.length - cap);
 }
 
 // "x y radius alpha;..." in World artboard units, for world.riv
@@ -657,7 +681,9 @@ function onPlayers(all) {
       r.x = st.x; r.y = st.y; r.heading = st.h || 0;
       r.shots = st.f || 0;
       r.seen = true;
+      r.buf = [];
     }
+    remember(r, st);
     // guns fired since the last update: replay them from where the plane is now
     const fired = Math.min(4, (st.f || 0) - r.shots);
     for (let i = 0; i < fired; i++) {
@@ -727,23 +753,59 @@ function cullViews() {
   }
 }
 
+// Other planes are shown a moment in the past (INTERP), moving between the positions they sent,
+// so they glide smoothly however unevenly the updates arrive. Past the newest update they keep
+// flying straight on for a moment.
+const INTERP = 0.12; // s
 function updateRemotes(dt) {
-  const now = performance.now();
+  const nowWall = Date.now();
   for (const r of remotes.values()) {
-    const st = r.net;
-    // dead reckoning from the last update, then ease toward it
-    const age = Math.min(0.5, (now - r.netT) / 1000);
-    const px = st.x + Math.sin(st.h) * (st.v || 0) * age;
-    const py = st.y - Math.cos(st.h) * (st.v || 0) * age;
-    if (Math.hypot(px - r.x, py - r.y) > 400) { r.x = px; r.y = py; }
-    const k = ease(10, dt);
-    r.x += (px - r.x) * k;
-    r.y += (py - r.y) * k;
-    r.heading = wrap(r.heading + wrap(st.h - r.heading) * k);
-    r.speed = st.v || 0;
-    r.bank += ((st.b || 0) - r.bank) * k;
-    r.pitch += ((st.q || 0) - r.pitch) * k;
+    const buf = r.buf;
+    if (!buf || !buf.length) continue;
+    const t = nowWall - r.lag - INTERP * 1000;
+    let a = buf[0], b = null;
+    for (let i = buf.length - 1; i >= 0; i--) {
+      if (buf[i].t <= t) { a = buf[i]; b = buf[i + 1] || null; break; }
+    }
+    let x, y, h, bank, pitch;
+    if (b) {
+      const f = Math.max(0, Math.min(1, (t - a.t) / Math.max(1, b.t - a.t)));
+      x = a.x + (b.x - a.x) * f;
+      y = a.y + (b.y - a.y) * f;
+      h = a.h + wrap(b.h - a.h) * f;
+      bank = a.b + (b.b - a.b) * f;
+      pitch = a.q + (b.q - a.q) * f;
+    } else {
+      // nothing newer yet: keep flying from the newest one (at most a quarter second)
+      const ahead = Math.max(0, Math.min(0.25, (t - a.t) / 1000));
+      x = a.x + Math.sin(a.h) * a.v * ahead;
+      y = a.y - Math.cos(a.h) * a.v * ahead;
+      h = a.h; bank = a.b; pitch = a.q;
+    }
+    // a light final smoothing hides the switch between the two ways above
+    const k = ease(25, dt);
+    if (Math.hypot(x - r.x, y - r.y) > 300) { r.x = x; r.y = y; }
+    r.x += (x - r.x) * k;
+    r.y += (y - r.y) * k;
+    r.heading = wrap(r.heading + wrap(h - r.heading) * k);
+    r.bank += (bank - r.bank) * k;
+    r.pitch += (pitch - r.pitch) * k;
+    r.speed = a.v;
   }
+}
+
+// keep a short history of each player's updates, timed by their own clock
+function remember(r, st) {
+  const now = Date.now();
+  const t = typeof st.t === 'number' ? st.t : now;
+  // the clock difference + delivery delay: the smallest seen lately (it may creep up slowly)
+  const d = now - t;
+  r.lag = r.lag == null ? d : Math.min(d, r.lag + 5);
+  if (!r.buf) r.buf = [];
+  const last = r.buf[r.buf.length - 1];
+  if (last && t <= last.t) return;
+  r.buf.push({ t, x: st.x, y: st.y, h: st.h || 0, v: st.v || 0, b: st.b || 0, q: st.q || 0 });
+  if (r.buf.length > 30) r.buf.shift();
 }
 
 function onHit({ by, dmg, crash }) {
@@ -877,7 +939,7 @@ function measure() {
   scene.style.left = (sw - D) / 2 + 'px';
   scene.style.top = (sh - D) / 2 + 'px';
   if (world) {
-    world.resizeDrawingSurfaceToCanvas();
+    world.resizeDrawingSurfaceToCanvas(worldDpr());
     const aw = world.artboardWidth;
     view.unit = aw > 0 ? aw / view.w : 1;
   }
@@ -885,7 +947,7 @@ function measure() {
   const mobile = matchMedia('(pointer: coarse)').matches;
   const gameK = Math.min(3.2, Math.max(mobile ? 1.2 : 0.72, Math.min(sw, sh) / 400));
   view.k = gameK * CAMERA.zoom;
-  if (shots) shots.resizeDrawingSurfaceToCanvas();
+  if (shots) shots.resizeDrawingSurfaceToCanvas(worldDpr());
   me.view && me.view.resize(view.k);
   for (const r of remotes.values()) r.view && r.view.resize(view.k);
   if (menuPlane) {
@@ -1012,11 +1074,38 @@ async function leaveGame() {
   selectRow(2);
 }
 
+// --- quality monitor ---------------------------------------------------------------------------
+// Two seconds with most frames slower than ~22 ms (under ~45 fps): one step down.
+const perf = { n: 0, slow: 0 };
+function watchFrames(dtMs) {
+  if (document.hidden || dtMs > 250) return; // a background tab or a hitch is not a slow computer
+  perf.n += 1;
+  if (dtMs > 22) perf.slow += 1;
+  if (perf.n < 120) return;
+  const slow = perf.slow / perf.n > 0.5;
+  perf.n = perf.slow = 0;
+  if (slow && qLevel > 0) {
+    qLevel -= 1;
+    try { localStorage.setItem('skyblitz.quality', String(qLevel)); } catch {}
+    console.info('quality ->', ['low', 'medium', 'high'][qLevel]);
+    applyQuality();
+  }
+}
+
+function applyQuality() {
+  setWorld('quality', Q().detail);
+  measure();
+}
+
 // --- main loop ------------------------------------------------------------------------------
 let lastT = 0;
 function frame(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0);
+  if (lastT) watchFrames(t - lastT);
   lastT = t;
+  // only the planes on show draw: my plane in the game, the big one in the menu
+  menuPlane && menuPlane.active(phase !== 'play');
+  me.view && me.view.active(phase === 'play');
 
   if (phase === 'play') {
     readInput();
@@ -1125,6 +1214,7 @@ async function boot() {
     me.view = mine;
     menuPlane = showcase;
     if (!wvm || !svm) console.warn('world.riv: view model not bound');
+    setWorld('quality', Q().detail);
     measure();
     selectRow(menuSel);
     $('#loading').classList.add('done');
@@ -1143,5 +1233,5 @@ boot();
 
 // ?debug exposes the game state to the console (and to automated tests)
 if (new URLSearchParams(location.search).has('debug')) {
-  window.__sky = { me, remotes, cam, bullets, view, get phase() { return phase; }, get session() { return session; }, get net() { return net; } };
+  window.__sky = { me, remotes, cam, bullets, view, get phase() { return phase; }, get session() { return session; }, get net() { return net; }, get quality() { return qLevel; }, setQuality(q) { qLevel = q; applyQuality(); } };
 }

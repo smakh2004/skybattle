@@ -14,7 +14,7 @@
   --shade: #060c12;
   --accent: #ff4d6a;
   --gold: #ffd32a;
-  --glass: rgba(6, 18, 30, 0.6);
+  --glass: rgba(6, 18, 30, 0.72);
   --plane-size: 150px;
   --display: "Russo One", system-ui, sans-serif;
 }
@@ -54,8 +54,7 @@ html, body {
   display: block;
 }
 
-/* the tracers glow onto what is under them, like the game's 'screen' blend */
-#shots { pointer-events: none; mix-blend-mode: screen; }
+#shots { pointer-events: none; }
 
 #planes {
   position: absolute;
@@ -160,7 +159,6 @@ html, body {
   border-radius: 10px;
   background: var(--glass);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(6px);
   min-width: 170px;
 }
 
@@ -192,7 +190,6 @@ html, body {
   border-radius: 10px;
   background: var(--glass);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(6px);
 }
 
 .board-head {

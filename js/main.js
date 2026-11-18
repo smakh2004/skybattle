@@ -379,6 +379,8 @@ fireBtn.addEventListener('pointercancel', fireEnd);
 $('#rocketBtn').addEventListener('pointerdown', (e) => { e.preventDefault(); fireRocket(); });
 $('#exitBtn').addEventListener('click', () => leaveGame());
 
+let padsOn = false; // (polled only once a gamepad is plugged in)
+addEventListener('gamepadconnected', () => { padsOn = true; });
 function readInput() {
   let x = 0, y = 0;
   if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
@@ -387,7 +389,7 @@ function readInput() {
   if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
   let fire = keys.has('Space') || touch.fire;
   if (touch.stickId !== null) { x = touch.x; y = touch.y; }
-  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  const pads = padsOn && navigator.getGamepads ? navigator.getGamepads() : [];
   for (const p of pads) {
     if (!p) continue;
     const ax = p.axes[0] || 0, ay = p.axes[1] || 0;
@@ -421,10 +423,15 @@ const onScreen = (sx, sy, m) => sx > -m && sy > -m && sx < view.sw + m && sy < v
 const near = (x, y) => clamp(1 - Math.hypot(x - cam.x, y - cam.y) / ((Math.hypot(view.sw, view.sh) * 0.75) / view.k), 0, 1);
 
 let bannerT = 0;
-function showBanner(html, secs = 2.2) {
-  banner.innerHTML = html;
-  banner.classList.add('show');
-  bannerT = secs;
+// An announcement on the solo game's wave banner (drawn by the overlay): a small kicker line over a
+// big title, with its animated `show`.
+let bannerSeq = 0;
+function showBanner(kicker, title) {
+  if (!svm) return;
+  const k = svm.string('bannerKick'), t = svm.string('bannerTitle');
+  if (k) k.value = String(kicker).toUpperCase();
+  if (t) t.value = String(title).toUpperCase();
+  setShots('bannerSeq', ++bannerSeq);
 }
 
 function addFeed(html) {
@@ -482,9 +489,9 @@ function goDown(cause, byId, byName) {
     sfx.play('explode_big');
     setTimeout(() => sfx.play('splash'), 950); // it hits the water
   }
-  if (cause === 'oil') showBanner('OUT OF OIL<small>THE ENGINE STOPPED</small>', RESPAWN);
-  else if (cause === 'crash') showBanner(`COLLISION<small>WITH ${esc(byName)}</small>`, RESPAWN);
-  else showBanner(`SHOT DOWN<small>BY ${esc(byName)}</small>`, RESPAWN);
+  if (cause === 'oil') showBanner('THE ENGINE STOPPED', 'OUT OF OIL');
+  else if (cause === 'crash') showBanner(`WITH ${byName}`, 'COLLISION');
+  else showBanner(`BY ${byName}`, 'SHOT DOWN');
   net && net.send(myState());
 }
 
@@ -502,7 +509,7 @@ function fly(p, dt, ctl) {
     if (p.deadT > RESPAWN) {
       spawn(p);
       cam.x = p.x; cam.y = p.y; cam.angle = p.heading;
-      showBanner('BACK IN THE AIR', 1.2);
+      showBanner('BACK IN THE AIR', 'FIGHT');
     }
   } else {
     const target = ctl.y < 0 ? FLIGHT.cruise + (FLIGHT.boost - FLIGHT.cruise) * -ctl.y
@@ -725,7 +732,7 @@ function fireRocket() {
     const d = Math.hypot(r.x - me.x, r.y - me.y);
     if (d < bestD) { best = r; bestD = d; }
   }
-  if (!best) { showBanner('NO TARGET IN RANGE', 0.8); return; }
+  if (!best) { showBanner('ROCKETS', 'NO TARGET'); return; }
   launch(me, best.id, true);
   sfx.play('rocket');
   me.rockets += 1;
@@ -1306,7 +1313,7 @@ function onKill(k) {
   }
   if (k.by === session.id) {
     me.score += SCORE.kill;
-    showBanner(`+${SCORE.kill}<small>YOU SHOT DOWN ${esc(cleanName(k.toName))}</small>`, 1.8);
+    showBanner(`YOU SHOT DOWN ${cleanName(k.toName)}`, `+${SCORE.kill}`);
   }
   addFeed(`<b>${esc(cleanName(k.byName))}</b> shot down ${esc(cleanName(k.toName))}`);
 }
@@ -1316,8 +1323,6 @@ let boardT = 0;
 let boardRect = null;
 let lastBoard = '';
 function updateBoard(dt) {
-  bannerT -= dt;
-  if (bannerT <= 0) banner.classList.remove('show');
   $('#rocketBtn').classList.toggle('on', me.rktAmmo > 0 && !me.dead);
   boardT -= dt;
   if (boardT > 0) return;
@@ -1331,12 +1336,13 @@ function updateBoard(dt) {
   const shown = rows.slice(0, BOARD_ROWS);
   const mine = rows.find((r) => r.me);
   if (mine.rank > BOARD_ROWS) shown.push(mine);
-  boardRect = board.getBoundingClientRect();
   const html = shown.map((r) =>
     `<li class="${r.rank === 1 ? 'first' : ''} ${r.me ? 'me' : ''}"><span class="rank">${String(r.rank).padStart(2, '0')}</span><span class="div"></span>` +
     `<span class="name">${esc(r.name)}${r.me ? ' (YOU)' : ''}</span><span class="pts">${r.score}</span></li>`).join('');
   // (only when it changed: the curved table is redrawn from it)
-  if (html !== lastBoard) { $('#boardList').innerHTML = html; lastBoard = html; }
+  if (html !== lastBoard) { $('#boardList').innerHTML = html; lastBoard = html; boardRect = null; }
+  if (!boardRect) boardRect = board.getBoundingClientRect();
+  drawBoard();
 }
 
 // name tags above the other planes, and arrows at the screen's edge toward those off it
@@ -1420,7 +1426,7 @@ function measure() {
   if (menuPlane) menuPlane.setSize(Math.round($('#menuPlane').clientWidth || 300));
   bendMenu();
 }
-addEventListener('resize', measure);
+addEventListener('resize', () => { boardRect = null; measure(); });
 
 // --- menu: the solo game's MainMenu (drawn by the overlay, bent like the game's) ---------------
 // 01 the player's name, 02 PLAY, 03 CONTROLS (the controls list). W / S or the arrows select, ENTER
@@ -1704,11 +1710,117 @@ class Bent {
   }
 }
 
-// the score table: its outer (right) end the tallest, like a panel beside the plane (PANEL_CURVE 0.3)
+// The score table, curved: its outer (right) end the tallest, like a panel beside the plane
+// (PANEL_CURVE 0.3). Drawn straight onto a canvas from where the page lays its parts out (the same
+// look as the HTML table, which stays for layout) - cheap enough to redraw on every score change.
 const board = $('.board');
-const bentBoard = new Bent(board, 0.3, false);
+const BOARD_CURVE = 0.3;
+const boardCv = document.createElement('canvas');
+boardCv.className = 'bent';
+board.parentElement.appendChild(boardCv);
+let boardBent = true;
+let boardKey = '';
+const boardFont = document.fonts ? document.fonts.load('13px "Russo One"').catch(() => {}) : Promise.resolve();
+let boardFontOk = false;
+boardFont.then(() => { boardFontOk = true; boardKey = ''; });
 function bendMenu() {
-  bentBoard.enable(!matchMedia('(max-width: 760px)').matches);
+  boardBent = !matchMedia('(max-width: 760px)').matches;
+  board.style.opacity = boardBent ? '0' : '';
+  boardCv.style.display = boardBent ? '' : 'none';
+  boardKey = '';
+  drawBoard();
+}
+let boardFlat = null;
+function drawBoard() {
+  if (!boardBent || !boardFontOk) return;
+  const w = board.offsetWidth, h = board.offsetHeight;
+  if (!w || !h) return;
+  const key = lastBoard + '|' + $('#boardCount').textContent + '|' + w + 'x' + h;
+  if (key === boardKey) return;
+  boardKey = key;
+  const d = Math.min(devicePixelRatio || 1, 2);
+  const W = Math.ceil(w * d), H = Math.ceil(h * d);
+  const flat = boardFlat || (boardFlat = document.createElement('canvas'));
+  if (flat.width !== W || flat.height !== H) { flat.width = W; flat.height = H; }
+  const g = flat.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, W, H);
+  g.scale(d, d);
+  const o = board.getBoundingClientRect();
+  const at = (el) => { const r = el.getBoundingClientRect(); return { x: r.left - o.left, y: r.top - o.top, w: r.width, h: r.height }; };
+  const text = (el, str, color, size, spacing, shadow, align = 'left') => {
+    const r = at(el);
+    g.font = `${size}px "Russo One", sans-serif`;
+    g.letterSpacing = spacing + 'px';
+    g.textBaseline = 'middle';
+    g.textAlign = align;
+    const x = align === 'right' ? r.x + r.w : r.x;
+    let str2 = str;
+    if (align === 'left') {
+      // (cut with … to its box, like text-overflow: ellipsis)
+      while (str2.length > 1 && g.measureText(str2).width > r.w + 1) str2 = str2.slice(0, -2) + '…';
+    }
+    if (shadow) { g.fillStyle = 'rgba(6, 12, 18, 0.7)'; g.fillText(str2, x + 1, r.y + r.h / 2 + 2); }
+    g.fillStyle = color;
+    g.fillText(str2, x, r.y + r.h / 2);
+  };
+  const plate = (r, inset, fill) => {
+    const x0 = r.x + inset, y0 = r.y + inset, x1 = r.x + r.w - inset, y1 = r.y + r.h - inset, ww = x1 - x0;
+    g.beginPath();
+    g.moveTo(x0 + ww * 0.05, y0); g.lineTo(x1, y0); g.lineTo(x1 - ww * 0.05, y1); g.lineTo(x0, y1);
+    g.closePath();
+    g.fillStyle = fill;
+    g.fill();
+  };
+  text($('.board-kicker'), 'PILOTS', '#ff4d6a', 13, 6, false);
+  text($('#boardCount'), $('#boardCount').textContent, 'rgba(230, 238, 245, 0.75)', 10, 2, false);
+  const rule = at($('.board-rule'));
+  const rg = g.createLinearGradient(rule.x, 0, rule.x + rule.w, 0);
+  rg.addColorStop(0, '#ff4d6a'); rg.addColorStop(0.6, '#ff4d6a'); rg.addColorStop(1, 'rgba(255, 77, 106, 0)');
+  g.fillStyle = rg;
+  g.fillRect(rule.x, rule.y, rule.w, rule.h);
+  for (const li of $('#boardList').children) {
+    const r = at(li);
+    const first = li.classList.contains('first');
+    if (first) { g.save(); g.shadowColor = 'rgba(255, 77, 106, 0.55)'; g.shadowBlur = 8 * d; }
+    plate(r, 0, first ? 'rgba(255, 255, 255, 0.85)' : 'rgba(230, 238, 245, 0.55)');
+    if (first) g.restore();
+    let fill;
+    if (first) { fill = g.createLinearGradient(r.x, 0, r.x + r.w, 0); fill.addColorStop(0, '#ff4d6a'); fill.addColorStop(1, '#ff6f86'); }
+    else { fill = g.createLinearGradient(r.x, 0, r.x + r.w, 0); fill.addColorStop(0, 'rgba(11, 18, 26, 0.92)'); fill.addColorStop(1, 'rgba(11, 18, 26, 0.72)'); }
+    plate(r, 1.5, fill);
+    const [rank, div, name, pts] = li.children;
+    text(rank, rank.textContent, `rgba(242, 246, 248, ${first ? 0.9 : 0.6})`, 10, 1, false);
+    const dr = at(div);
+    g.save();
+    g.translate(dr.x + dr.w / 2, dr.y + dr.h / 2);
+    g.transform(1, 0, Math.tan((-14 * Math.PI) / 180), 1, 0, 0);
+    g.fillStyle = 'rgba(242, 246, 248, 0.5)';
+    g.fillRect(-dr.w / 2, -dr.h / 2, dr.w, dr.h);
+    g.restore();
+    const meRow = li.classList.contains('me') && !first;
+    text(name, name.textContent, meRow ? '#ff4d6a' : '#f2f6f8', 13, 1.2, true);
+    text(pts, pts.textContent, '#f2f6f8', 13, 1.2, true, 'right');
+  }
+  // bent: one column at a time, stretched about the middle; the canvas covers the table plus room
+  // above and below for the taller end
+  const pad = Math.ceil((h * BOARD_CURVE) / 2) + 2, P = Math.ceil(pad * d);
+  const cv = boardCv;
+  if (cv.width !== W || cv.height !== H + 2 * P) { cv.width = W; cv.height = H + 2 * P; }
+  cv.style.width = w + 'px';
+  cv.style.height = h + 2 * pad + 'px';
+  cv.style.left = board.offsetLeft + 'px';
+  cv.style.top = board.offsetTop - pad + 'px';
+  const c = cv.getContext('2d');
+  c.clearRect(0, 0, cv.width, cv.height);
+  c.imageSmoothingEnabled = true;
+  c.imageSmoothingQuality = 'high';
+  const yc = P + H / 2;
+  for (let i = 0; i < W; i++) {
+    const u = 1 - i / (W - 1);
+    const sc = 1 + BOARD_CURVE * (1 - u) * (1 - u);
+    c.drawImage(flat, i, 0, 1, H, i, yc - (H / 2) * sc, 1, H * sc);
+  }
 }
 
 async function joinGame() {
@@ -1751,7 +1863,7 @@ async function joinGame() {
   joinedAt = performance.now();
   stage.dataset.phase = 'play';
   boardT = 0;
-  showBanner(`SKY ARENA<small>SHOOT THEM DOWN</small>`, 2);
+  showBanner('SHOOT THEM DOWN', 'SKY ARENA');
   net.send(myState());
 }
 

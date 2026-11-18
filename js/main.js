@@ -151,6 +151,15 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const NAME_MAX = 12; // letters in a name (it fits the menu's button)
+// the room for a name on the menu's button (MainMenu units: its text at 22 px, letter spacing 2.2)
+const NAME_ROOM = 192;
+let nameCtx = null;
+function nameWidth(str) {
+  nameCtx = nameCtx || document.createElement('canvas').getContext('2d');
+  nameCtx.font = '22px "Russo One", sans-serif';
+  nameCtx.letterSpacing = '2.2px';
+  return nameCtx.measureText(str).width;
+}
 const cleanName = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX);
 const backOut = (t) => { const c1 = 1.70158, u = t - 1; return 1 + (c1 + 1) * u * u * u + c1 * u * u; };
 
@@ -1580,11 +1589,11 @@ function rowAt(x, y) {
   return 0;
 }
 
-// a slider row's level at screen x (the tracks run 88..198 of the row's 330 units)
+// a slider row's level at screen x (the tracks run 88..198 of the row's 270 units)
 function sliderAt(i, x) {
   const r = menuRows()[i - 1];
   if (!r) return null;
-  const u = ((x - r[0]) / (r[2] - r[0])) * 330;
+  const u = ((x - r[0]) / (r[2] - r[0])) * 270;
   return (u - 88) / (198 - 88);
 }
 let dragRow = 0;
@@ -1608,7 +1617,8 @@ menuEl.addEventListener('pointerdown', (e) => {
 });
 addEventListener('pointerup', () => { dragRow = 0; });
 nameInput.addEventListener('input', () => {
-  const v = nameInput.value.toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '').slice(0, NAME_MAX);
+  let v = nameInput.value.toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '').slice(0, NAME_MAX);
+  while (v.length > 1 && nameWidth(v) > NAME_ROOM) v = v.slice(0, -1); // (it has to fit the button)
   if (v !== nameInput.value) nameInput.value = v;
   setStatus('');
 });

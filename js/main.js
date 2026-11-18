@@ -563,17 +563,56 @@ function podVolley(p, mine) {
 }
 
 /** A bullet from plane p's gun (0 / 1), or its pod. `mine`: I fired it, so I check what it hits. */
+// Gun targeting (the solo game's auto lock): the guns reach a cone ahead of the plane (wider with the
+// wing guns); the best plane in it within AIM.range is the target - shots go to where it will be
+// (its lead point) and curve onto it.
+const AIM = { cone: (12 * Math.PI) / 180, podCone: (24 * Math.PI) / 180, range: 760, turn: 5.5 };
+function aimTarget(p, pod) {
+  const cone = pod || p.podAmmo > 0 ? AIM.podCone : AIM.cone;
+  let best = null, bestS = Infinity;
+  for (const e of planesForHits(p.id)) {
+    if (e.gone || e.fling) continue;
+    const dx = e.x - p.x, dy = e.y - p.y;
+    const d = Math.hypot(dx, dy);
+    if (d > AIM.range || d < 1) continue;
+    const ang = Math.abs(wrapAngle(Math.atan2(dx, -dy) - p.heading));
+    if (ang > cone + Math.atan2(22, d)) continue;
+    const sc = ang / cone + d / AIM.range;
+    if (sc < bestS) { best = e; bestS = sc; }
+  }
+  return best;
+}
+// where a bullet from (gx, gy) meets e: its position a flight time ahead
+function leadPoint(gx, gy, e) {
+  const evx = Math.sin(e.heading) * (e.speed || 0), evy = -Math.cos(e.heading) * (e.speed || 0);
+  let tx = e.x, ty = e.y;
+  for (let i = 0; i < 2; i++) {
+    const t = Math.hypot(tx - gx, ty - gy) / GUN.muzzle;
+    tx = e.x + evx * t; ty = e.y + evy * t;
+  }
+  return [tx, ty];
+}
+const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
 function shoot(p, gun, mine, pod = false) {
   const [mx, my] = (pod ? POD : GUN).muzzles[gun];
   const c = Math.cos(p.heading), sn = Math.sin(p.heading);
-  const a = p.heading + rand(-GUN.spread, GUN.spread) * (pod ? 2 : 1);
+  const gx = p.x + mx * c - my * sn, gy = p.y + mx * sn + my * c;
+  const tgt = aimTarget(p, pod);
+  let a = p.heading + rand(-GUN.spread, GUN.spread) * (pod ? 2 : 1);
+  if (tgt) {
+    const [tx, ty] = leadPoint(gx, gy, tgt);
+    const cone = pod || p.podAmmo > 0 ? AIM.podCone : AIM.cone;
+    a = p.heading + clamp(wrapAngle(Math.atan2(tx - gx, -(ty - gy)) - p.heading), -cone, cone);
+  }
   bullets.push({
+    tgt,
     owner: p.id,
     mine,
     pod,
     dmg: pod ? POD.dmg : GUN.dmg,
-    x: p.x + mx * c - my * sn,
-    y: p.y + mx * sn + my * c,
+    x: gx,
+    y: gy,
     vx: Math.sin(p.heading) * p.speed + Math.sin(a) * GUN.muzzle,
     vy: -Math.cos(p.heading) * p.speed - Math.cos(a) * GUN.muzzle,
     dx: Math.sin(a), dy: -Math.cos(a),
@@ -780,6 +819,23 @@ function updateBullets(dt) {
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     b.t += dt;
+    // locked shots curve onto their target while it is still ahead of them
+    const tg = b.tgt;
+    if (tg) {
+      if (tg.dead || tg.gone || tg.fling || (tg !== me && !remotes.has(tg.id))) b.tgt = null;
+      else {
+        const sp = Math.hypot(b.vx, b.vy);
+        const cur = Math.atan2(b.vx, -b.vy);
+        const want = Math.atan2(tg.x - b.x, -(tg.y - b.y));
+        const off = wrapAngle(want - cur);
+        if (Math.abs(off) > Math.PI / 2) b.tgt = null; // flew past it
+        else {
+          const na = cur + clamp(off, -AIM.turn * dt, AIM.turn * dt);
+          b.vx = Math.sin(na) * sp; b.vy = -Math.cos(na) * sp;
+          b.dx = Math.sin(na); b.dy = -Math.cos(na);
+        }
+      }
+    }
     const px = b.x, py = b.y;
     b.x += b.vx * dt;
     b.y += b.vy * dt;

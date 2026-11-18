@@ -65,8 +65,25 @@ class FirebaseNet {
     return this.ready;
   }
 
+  // The menu: everyone's planes, without joining (shown flying behind the menu).
+  async watch() {
+    const uid = await this.prepare();
+    if (this.watchOff || this.meRef) return;
+    const { ref, onValue } = this.db;
+    this.watchOff = onValue(ref(this.database, `${ARENA}/players`), (snap) => {
+      const all = snap.val() || {};
+      delete all[uid];
+      this.onPlayers(all);
+    });
+  }
+
+  unwatch() {
+    if (this.watchOff) { try { this.watchOff(); } catch {} this.watchOff = null; }
+  }
+
   async join({ name, plane }) {
     const uid = (this.uid = await this.prepare());
+    this.unwatch();
     const db = this.db;
     const d = this.database;
     const { ref, set, onDisconnect, onValue, onChildAdded, remove, query, limitToLast } = db;
@@ -172,8 +189,11 @@ class LocalNet {
     if (changed) this.emit();
   }
 
+  watch() { this.watching = true; this.emit(); return Promise.resolve(); }
+  unwatch() { this.watching = false; }
+
   emit() {
-    if (!this.joined) return;
+    if (!this.joined && !this.watching) return;
     const all = {};
     for (const [id, p] of this.peers) all[id] = p.state;
     this.onPlayers(all);

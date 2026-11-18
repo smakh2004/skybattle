@@ -1078,7 +1078,7 @@ function onPlayers(all) {
     if (!r) {
       r = makeRemote(id, st);
       remotes.set(id, r);
-      if (performance.now() - joinedAt > 2000) addFeed(`<b>${esc(cleanName(st.n))}</b> joined`);
+      if (phase === 'play' && performance.now() - joinedAt > 2000) addFeed(`<b>${esc(cleanName(st.n))}</b> joined`);
     }
     const wasDead = r.dead;
     if (!wasDead && st.d) {
@@ -1377,15 +1377,30 @@ function updateTags() {
   }
 }
 
-function updateCamera(dt) {
-  if (me.dead) return; // (it watches the plane fall away from where it went down)
-  const v = me.speed * CAMERA.lead;
-  const tx = me.x + Math.sin(me.heading) * v;
-  const ty = me.y - Math.cos(me.heading) * v;
+// shift: where on the screen the plane sits, right of the middle (px; the menu's spectating view)
+function updateCamera(dt, p = me, shift = 0) {
+  if (p.dead) return; // (it watches the plane fall away from where it went down)
+  const v = (p.speed || 0) * CAMERA.lead;
+  const c = Math.cos(cam.angle), sn = Math.sin(cam.angle);
+  const tx = p.x + Math.sin(p.heading) * v - (c * shift) / view.k;
+  const ty = p.y - Math.cos(p.heading) * v - (sn * shift) / view.k;
   const k = ease(CAMERA.ease, dt);
   cam.x += (tx - cam.x) * k;
   cam.y += (ty - cam.y) * k;
-  cam.angle += wrap(me.heading - cam.angle) * ease(CAMERA.turn, dt);
+  cam.angle += wrap(p.heading - cam.angle) * ease(CAMERA.turn, dt);
+}
+
+// The menu shows a real player flying, live (the one with the best score; kept until they go),
+// where the showcase plane would be; with nobody online, the showcase plane.
+let spectId = null;
+function spectTarget() {
+  let r = spectId && remotes.get(spectId);
+  if (r && r.seen && !r.gone) return r;
+  if (r && r.dead) return r; // (watch them go down; another is picked once they are gone)
+  r = null;
+  for (const o of remotes.values()) if (o.seen && !o.dead && !o.gone && (!r || o.score > r.score)) r = o;
+  spectId = r ? r.id : null;
+  return r;
 }
 
 // --- Rive bindings ------------------------------------------------------------------------------
@@ -1450,6 +1465,7 @@ let menuT = 0;
 let menuFireT = 1;
 const menuMotion = { phase: 'rest', t: 0.5, lean: 0, ox: 0, rate: 2, bank: 0, pitch: 0, burst: 0.6, gunT: 0 };
 const menuEl = $('#menu');
+const showcase = $('#menu .showcase');
 
 function setSel(i, sound = true) {
   if (i !== menuSel && sound) sfx.play('ui_move');
@@ -1863,7 +1879,7 @@ async function joinGame() {
   joinedAt = performance.now();
   stage.dataset.phase = 'play';
   boardT = 0;
-  showBanner('SHOOT THEM DOWN', 'SKY ARENA');
+  setTimeout(() => { if (phase === 'play') showBanner('SHOOT THEM DOWN', 'SKY ARENA'); }, 450);
   net.send(myState());
 }
 
@@ -1877,7 +1893,9 @@ async function leaveGame() {
   session = null;
   for (const r of remotes.values()) { r.view && r.view.dispose(); r.tag.remove(); r.arrow.remove(); }
   remotes.clear();
+  spectId = null;
   bullets.length = 0;
+  net && net.watch().catch(() => {}); // (the arena behind the menu again)
   sparks.length = 0;
   smoke.length = 0;
   missiles.length = 0;
@@ -1915,7 +1933,7 @@ function frame(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0);
   if (lastT) watchFrames(t - lastT);
   lastT = t;
-  menuPlane && menuPlane.active(phase !== 'play');
+  menuPlane && menuPlane.active(phase !== 'play' && showcase.style.display !== 'none');
   me.view && me.view.active(phase === 'play');
 
   if (phase === 'play') {
@@ -1941,14 +1959,23 @@ function frame(t) {
     }
     updateBoard(dt);
   } else {
-    // the menu: the camera drifts over the sea; the showcase plane sways and fires now and then
+    // the menu: a real player flying, live (or, with nobody online, the camera drifts over the sea
+    // and the showcase plane sways and fires now and then)
     menuT += dt;
-    cam.x += 18 * dt;
-    cam.y -= 40 * dt;
-    cam.angle += wrap(0 - cam.angle) * ease(1, dt);
+    updateRemotes(dt);
+    cullViews();
+    const sp = phase === 'menu' ? spectTarget() : null;
+    showcase.style.display = sp ? 'none' : '';
+    if (sp) {
+      updateCamera(dt, sp, view.sw * 0.17);
+    } else {
+      cam.x += 18 * dt;
+      cam.y -= 40 * dt;
+      cam.angle += wrap(0 - cam.angle) * ease(1, dt);
+    }
     updateBullets(dt);
     updateMissiles(dt);
-    if (menuPlane) {
+    if (menuPlane && !sp) {
       const m = menuMotion;
       m.t -= dt;
       if (m.t <= 0) {
@@ -2114,6 +2141,10 @@ async function boot() {
     createNet().then((n) => {
       net = net || n;
       net.prepare().catch((e) => console.warn('connect', e)); // ahead of PLAY
+      net.onPlayers = onPlayers;
+      net.onHit = onHit;
+      net.onKill = onKill;
+      net.watch().catch((e) => console.warn('watch', e)); // the live arena behind the menu
       if (net.mode === 'local') setStatus('OFFLINE TEST MODE · OPEN MORE WINDOWS TO PLAY TOGETHER');
     }).catch((e) => console.warn('net', e));
   } catch (e) {

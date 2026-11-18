@@ -2187,6 +2187,7 @@ function frame(t) {
   setWorld('planeX', wx * view.unit);
   setWorld('planeY', wy * view.unit);
   setWorld('angle', cam.angle);
+  setWorld('heading', me.heading); // (the clouds' boost blur streaks along it)
   // BOOST: the clouds' motion blur, easing in and out with it
   boostFx += ((phase === 'play' && boost.on ? 1 : 0) - boostFx) * ease(boost.on ? 5 : 3, dt);
   setWorld('blur', boostFx < 0.01 ? 0 : +boostFx.toFixed(3));

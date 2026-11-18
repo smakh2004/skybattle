@@ -6,7 +6,9 @@
   <title>Sky Blitz</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="css/style.css" />
+  <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
+       browsers load the new files at once instead of a cached copy -->
+  <link rel="stylesheet" href="css/style.css?v=5" />
 </head>
 <body>
   <main id="stage" data-phase="menu">
@@ -97,6 +99,6 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js"></script>
+  <script type="module" src="js/main.js?v=5"></script>
 </body>
 </html>

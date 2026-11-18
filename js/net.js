@@ -17,7 +17,8 @@
 //   n name, p plane, x y position, h heading, v speed, b bank, q pitch, f shots fired (counter),
 //   d dead, u burning, i shielded, a health %, s score, t time (ms)
 
-import { firebaseConfig } from './firebase-config.js';
+const V = new URL(import.meta.url).searchParams.get('v') || '0';
+const { firebaseConfig } = await import(`./firebase-config.js?v=${V}`);
 
 const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const ARENA = 'arena'; // the database path everyone shares

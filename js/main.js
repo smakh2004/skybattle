@@ -12,7 +12,10 @@
  * Units: world positions and speeds are in plane-artboard units, the same for every screen.
  * On screen a unit is `view.k` css px (the game's screen scale x the camera zoom).
  */
-import { createNet } from './net.js';
+// the build version from main.js?v=N (index.html), passed on to every file this page loads, so
+// an update reaches players at once instead of after the browser's cache runs out
+const V = new URL(import.meta.url).searchParams.get('v') || '0';
+const { createNet } = await import(`./net.js?v=${V}`);
 
 const R = window.rive;
 
@@ -99,13 +102,13 @@ let planesFile = null;
 async function planesSource() {
   if (planesFile) return { riveFile: planesFile };
   try {
-    const f = new R.RiveFile({ src: 'riv/planes.riv' });
+    const f = new R.RiveFile({ src: `riv/planes.riv?v=${V}` });
     await f.init();
     planesFile = f;
     return { riveFile: f };
   } catch (e) {
     console.warn('shared planes.riv failed, loading per plane', e);
-    return { src: 'riv/planes.riv' };
+    return { src: `riv/planes.riv?v=${V}` };
   }
 }
 
@@ -1032,14 +1035,14 @@ async function boot() {
   try {
     const [w, s, mine, showcase] = await Promise.all([
       loadRive({
-        src: 'riv/world.riv',
+        src: `riv/world.riv?v=${V}`,
         canvas: worldCanvas,
         artboard: 'World',
         enableGPUCanvas: true, // world.luau draws the ocean and clouds with WGSL shaders
         layout: new R.Layout({ fit: R.Fit.Layout }),
       }),
       loadRive({
-        src: 'riv/world.riv',
+        src: `riv/world.riv?v=${V}`,
         canvas: shotsCanvas,
         artboard: 'Shots',
         layout: new R.Layout({ fit: R.Fit.Layout }),

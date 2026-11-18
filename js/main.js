@@ -216,6 +216,16 @@ const remotes = new Map(); // id -> remote player
 const bullets = [];
 const sparks = []; // where bullets struck a plane: { x, y, t }
 const SPARK_LIFE = 0.25;
+// Smoke trails: burning planes leave puffs in the sky (world space), so the smoke stays where the
+// plane was and draws its path, growing and fading. world.riv draws them under the planes.
+// FIRE: each plane's flames (wings, body) in artboard units from its centre; puffs start there.
+const FIRE = {
+  1: [[29.3, -1.5], [-28.7, -12.6], [0.3, 24]],
+  2: [[18.5, -2.1], [-18.6, -0.6], [0.7, 11.3]],
+  3: [[25.3, -6.5], [-24.5, -6.5], [0.3, 11.6]],
+};
+const SMOKE = { every: 0.03, life: [2.4, 3.2], r0: 4, r1: [18, 28], alpha: 0.42, max: 600, fall: 1.0 };
+const smoke = []; // { x, y, vx, vy, t, life, r1, a }
 
 // --- input ----------------------------------------------------------------------------------
 const keys = new Set();
@@ -522,6 +532,56 @@ function crashInto(id, name) {
   net && net.send(myState());
 }
 
+// Puffs from every plane that is burning, or going down (for the first moments of its fall).
+function updateSmoke(dt) {
+  const emitters = [];
+  if (phase === 'play') emitters.push(me);
+  for (const r of remotes.values()) if (r.seen) emitters.push(r);
+  for (const p of emitters) {
+    const falling = p.dead && (p === me ? p.deadT : (performance.now() - (p.deadAt || 0)) / 1000) < SMOKE.fall;
+    if (!(p.burning && !p.dead) && !falling) { p.smokeT = 0; continue; }
+    p.smokeT = (p.smokeT || 0) - dt;
+    while (p.smokeT <= 0) {
+      p.smokeT += SMOKE.every * (falling ? 1.6 : 1); // a falling plane hardly moves: fewer puffs
+      const spots = FIRE[p.plane] || FIRE[1];
+      const [fx, fy] = spots[Math.floor(Math.random() * spots.length)];
+      const c = Math.cos(p.heading), sn = Math.sin(p.heading);
+      smoke.push({
+        x: p.x + fx * c - fy * sn + rand(-2, 2),
+        y: p.y + fx * sn + fy * c + rand(-2, 2),
+        vx: rand(-6, 6), vy: rand(-6, 6), // a slow drift; the puff stays where it was left
+        t: 0,
+        life: rand(SMOKE.life[0], SMOKE.life[1]) * (falling ? 0.8 : 1),
+        r1: rand(SMOKE.r1[0], SMOKE.r1[1]) * (falling ? 1.4 : 1),
+        a: SMOKE.alpha * (falling ? 0.8 : 1),
+      });
+    }
+  }
+  for (let i = smoke.length - 1; i >= 0; i--) {
+    const pf = smoke[i];
+    pf.t += dt;
+    pf.x += pf.vx * dt;
+    pf.y += pf.vy * dt;
+    if (pf.t > pf.life) smoke.splice(i, 1);
+  }
+  if (smoke.length > SMOKE.max) smoke.splice(0, smoke.length - SMOKE.max);
+}
+
+// "x y radius alpha;..." in World artboard units, for world.riv
+function smokeData() {
+  const u = view.unit;
+  let out = '';
+  for (const pf of smoke) {
+    const f = pf.t / pf.life;
+    const r = (SMOKE.r0 + (pf.r1 - SMOKE.r0) * Math.sqrt(f)) * view.k;
+    const [x, y] = toScene(pf.x, pf.y);
+    if (x < -r || y < -r || x > view.w + r || y > view.h + r) continue;
+    const a = pf.a * Math.min(1, pf.t / 0.08) * (1 - f) * (1 - f * 0.4);
+    out += `${(x * u).toFixed(1)} ${(y * u).toFixed(1)} ${(r * u).toFixed(1)} ${a.toFixed(3)};`;
+  }
+  return out;
+}
+
 // the planes a bullet can touch: everyone alive except whoever fired it
 function* planesForHits(owner) {
   if (owner !== me.id && !me.dead && phase === 'play') yield me;
@@ -582,6 +642,7 @@ function onPlayers(all) {
       if (performance.now() - joinedAt > 2000) addFeed(`<b>${esc(cleanName(st.n))}</b> joined`);
     }
     const wasDead = r.dead;
+    if (!wasDead && st.d) r.deadAt = performance.now();
     r.net = st;
     r.netT = now;
     r.name = cleanName(st.n) || 'PILOT';
@@ -799,6 +860,7 @@ let wvm = null;
 let shots = null;
 let svm = null;
 const wNum = {};
+let wSmoke = null;
 function setWorld(name, v) {
   if (!wvm) return;
   const p = wNum[name] || (wNum[name] = wvm.number(name));
@@ -944,6 +1006,7 @@ async function leaveGame() {
   remotes.clear();
   bullets.length = 0;
   sparks.length = 0;
+  smoke.length = 0;
   feed.innerHTML = '';
   banner.classList.remove('show');
   selectRow(2);
@@ -1011,6 +1074,11 @@ function frame(t) {
   setWorld('heading', me.heading);
   setWorld('planeOn', phase === 'play' && !me.dead ? 1 : 0);
   setWorld('k', view.k * view.unit);
+  updateSmoke(dt);
+  if (wvm) {
+    const sm = wSmoke || (wSmoke = wvm.string('smoke'));
+    if (sm) sm.value = smokeData();
+  }
 
   scene.style.transform = `rotate(${-cam.angle}rad)`;
   if (phase === 'play') updateTags();

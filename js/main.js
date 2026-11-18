@@ -903,6 +903,12 @@ function updateBullets(dt) {
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     let gone = b.t > BULLET_LIFE;
+    if (b.menuHit !== undefined && b.t >= b.menuHit) {
+      // (the menu's enemy fire reaching the plane)
+      gone = true;
+      sparks.push({ x: b.x, y: b.y, t: 0 });
+      if (menuPlane && phase !== 'play') { menuPlane.fire('hit'); sfx.play('hit_player', 0.5); }
+    }
     if (!gone && live) {
       // every bullet stops where it touches a plane on this screen; only mine deal damage (the
       // shooter decides hits, the target takes the damage), so every screen agrees
@@ -1514,7 +1520,37 @@ try { qManual = localStorage.getItem('skyblitz.qmanual') === '1'; } catch {}
 let menuPress = 0;
 let menuT = 0;
 let menuFireT = 1;
-const menuMotion = { phase: 'rest', t: 0.5, lean: 0, ox: 0, rate: 2, bank: 0, pitch: 0, burst: 0.6, gunT: 0 };
+const menuMotion = { phase: 'rest', t: 0.5, lean: 0, ox: 0, rate: 2, bank: 0, pitch: 0, burst: 0.6, gunT: 0, hitT: 1.4 };
+// the screen back into the world (toScreen's inverse)
+function fromScreen(sx, sy) {
+  const X = sx - view.sw / 2, Y = sy - view.sh / 2;
+  const c = Math.cos(cam.angle), s = Math.sin(cam.angle);
+  return [cam.x + (c * X - s * Y) / view.k, cam.y + (s * X + c * Y) / view.k];
+}
+// The menu: now and then enemy fire streaks in from above and hits the plane (its hit timeline: a
+// shake, a wobble, smoke), as in the solo game's menu - it never harms it.
+function menuIncoming(dt) {
+  const m = menuMotion;
+  if (!menuPlane || m.phase !== 'rest' || m.hitT > 50) return;
+  m.hitT -= dt;
+  if (m.hitT > 0) return;
+  m.hitT = 1000; // (the next is scheduled when it is level again)
+  const r = $('#menuPlane').getBoundingClientRect();
+  if (!r.width) return;
+  const sx = r.left + r.width / 2, sy = r.top + r.height * 0.45;
+  const n = 2 + Math.floor(Math.random() * 2);
+  const fromX = sx + rand(-90, 90) * (view.baseK / CAMERA.zoom);
+  const speed = 900;
+  for (let i = 0; i < n; i++) {
+    const startY = sy - view.sh * 0.6 - i * 46 * (view.baseK / CAMERA.zoom);
+    const [x0, y0] = fromScreen(fromX, startY);
+    const [x1, y1] = fromScreen(sx + rand(-12, 12), sy);
+    const d = Math.hypot(x1 - x0, y1 - y0);
+    bullets.push({ owner: 'menu', mine: false, pod: false, dmg: 0, x: x0, y: y0,
+      vx: ((x1 - x0) / d) * speed, vy: ((y1 - y0) / d) * speed, dx: (x1 - x0) / d, dy: (y1 - y0) / d,
+      muzzle: speed, t: 0, menuHit: d / speed });
+  }
+}
 const menuEl = $('#menu');
 const showcase = $('#menu .showcase');
 
@@ -1948,7 +1984,6 @@ async function leaveGame() {
   remotes.clear();
   spectId = null;
   bullets.length = 0;
-  net && net.watch().catch(() => {}); // (the arena behind the menu again)
   sparks.length = 0;
   smoke.length = 0;
   missiles.length = 0;
@@ -2018,18 +2053,14 @@ function frame(t) {
     menuT += dt;
     updateRemotes(dt);
     cullViews();
-    const sp = phase === 'menu' ? spectTarget() : null;
-    showcase.style.display = sp ? 'none' : '';
-    if (sp) {
-      updateCamera(dt, sp, view.sw * 0.17);
-    } else {
-      cam.x += 18 * dt;
-      cam.y -= 40 * dt;
-      cam.angle += wrap(0 - cam.angle) * ease(1, dt);
-    }
+    // the sea goes by under it, and slides sideways as it banks (game.luau: worldX += bank * 240 k)
+    cam.y -= 40 * dt;
+    cam.x += menuMotion.bank * 240 * (view.baseK / CAMERA.zoom) * dt / view.k;
+    cam.angle += wrap(0 - cam.angle) * ease(1, dt);
+    menuIncoming(dt);
     updateBullets(dt);
     updateMissiles(dt);
-    if (menuPlane && !sp) {
+    if (menuPlane) {
       const m = menuMotion;
       m.t -= dt;
       if (m.t <= 0) {
@@ -2046,6 +2077,7 @@ function frame(t) {
           m.rate = rand(1.8, 3);
           m.t = rand(1.6, 2.6);
           m.phase = 'rest';
+          if (Math.random() < 0.5) m.hitT = 0.6; // sometimes enemy fire comes in while it is level
         }
       }
       const step = (v, to) => (v < to ? Math.min(to, v + m.rate * dt) : Math.max(to, v - m.rate * dt));
@@ -2203,7 +2235,6 @@ async function boot() {
       net.onPlayers = onPlayers;
       net.onHit = onHit;
       net.onKill = onKill;
-      net.watch().catch((e) => console.warn('watch', e)); // the live arena behind the menu
       if (net.mode === 'local') setStatus('OFFLINE TEST MODE · OPEN MORE WINDOWS TO PLAY TOGETHER');
     }).catch((e) => console.warn('net', e));
   } catch (e) {

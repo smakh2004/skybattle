@@ -27,7 +27,7 @@ const R = window.rive;
 // --- tuning (the solo game's numbers, in world units: its px/s at k = 1.5, / 1.5) ---------------
 // E (held): BOOST - the plane flies much faster while the charge lasts (empty in BOOST.drain^-1 s
 // of use); after a short pause it refills on its own. The gauge is in the bottom bar.
-const BOOST = { speed: 420, accel: 4, drain: 0.33, refill: 0.16, wait: 0.8 };
+const BOOST = { speed: 600, accel: 5, drain: 0.33, refill: 0.16, wait: 0.8 };
 const boost = { charge: 1, on: false, wait: 0 };
 const MENU_SPEED = 260; // the menu's sea and clouds rush by at this (screen px/s at the game's scale)
 const FLIGHT = {
@@ -1483,11 +1483,15 @@ function updateCamera(dt, p = me, shift = 0) {
   // (above the throttle's top speed - BOOST - the lead grows only enough to cancel the camera's
   // extra lag, so the plane keeps its place on the screen instead of sliding down under the HUD)
   const sp = p.speed || 0;
-  const v = Math.min(sp, FLIGHT.boost) * CAMERA.lead + Math.max(0, sp - FLIGHT.boost) / CAMERA.ease;
+  const ce = CAMERA.ease;
+  // the camera's steady lead ahead of the plane is v - sp / ce; above the throttle's top speed it is
+  // held at the cruise one (so a BOOST keeps the plane where it flies normally)
+  const ahead = (sp > FLIGHT.boost ? FLIGHT.cruise : Math.min(sp, FLIGHT.boost)) * (CAMERA.lead - 1 / ce);
+  const v = sp > FLIGHT.boost ? ahead + sp / ce : sp * CAMERA.lead;
   const c = Math.cos(cam.angle), sn = Math.sin(cam.angle);
   const tx = p.x + Math.sin(p.heading) * v - (c * shift) / view.k;
   const ty = p.y - Math.cos(p.heading) * v - (sn * shift) / view.k;
-  const k = ease(CAMERA.ease, dt);
+  const k = ease(ce, dt);
   cam.x += (tx - cam.x) * k;
   cam.y += (ty - cam.y) * k;
   cam.angle += wrap(p.heading - cam.angle) * ease(CAMERA.turn, dt);

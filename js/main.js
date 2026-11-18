@@ -78,6 +78,10 @@ const RESPAWN = 3; // s after going down
 const SPAWN_SHIELD = 2.5; // s of invulnerability after (re)spawning
 const SCORE = { hit: 10, kill: 100 };
 const SEND_HZ = 12;
+// a shot-down plane is blown off the screen like the solo game's enemies (game.luau killEnemy /
+// DEATH): near the middle it goes down and out the bottom edge, veering to a side; near a side, off
+// that side - faster and faster - and it is gone the moment it leaves the screen.
+const DEATH = { middle: 0.17, push: 1500 };
 // the camera looks ahead of the plane (so the plane sits low on the screen), follows it, and turns
 // with it a little late. lead: s of travel ahead; ease: follow (1/s); turn: angle catch-up (1/s);
 // zoom: how far out (1 = the game's own scale, smaller = further away)
@@ -851,9 +855,10 @@ function crashInto(id, name) {
 function updateSmoke(dt) {
   const emitters = [];
   if (phase === 'play') emitters.push(me);
-  for (const r of remotes.values()) if (r.seen) emitters.push(r);
+  for (const r of remotes.values()) if (r.seen && !r.gone) emitters.push(r);
   for (const p of emitters) {
-    const falling = p.dead && (p === me ? p.deadT : (performance.now() - (p.deadAt || 0)) / 1000) < SMOKE.fall;
+    // going down: my plane for a moment; another plane all the way off the screen (it burns as it goes)
+    const falling = p.dead && (p === me ? p.deadT < SMOKE.fall : p.fling ? !p.gone : (performance.now() - (p.deadAt || 0)) / 1000 < SMOKE.fall);
     if (!(p.burning && !p.dead) && !falling) { p.smokeT = 0; continue; }
     p.smokeT = (p.smokeT || 0) - dt;
     while (p.smokeT <= 0) {
@@ -976,7 +981,8 @@ function onPlayers(all) {
       if (performance.now() - joinedAt > 2000) addFeed(`<b>${esc(cleanName(st.n))}</b> joined`);
     }
     const wasDead = r.dead;
-    if (!wasDead && st.d) r.deadAt = performance.now();
+    if (!wasDead && st.d) { r.deadAt = performance.now(); startFling(r); }
+    if (wasDead && !st.d) { r.fling = null; r.gone = false; }
     r.net = st;
     r.name = cleanName(st.n) || 'PILOT';
     r.hue = typeof st.c === 'number' ? st.c : 0;
@@ -1065,6 +1071,40 @@ function cullViews() {
   }
 }
 
+// The solo game's shot-down flight (killEnemy / the dying update), in screen pixels at its scale.
+function startFling(r) {
+  const K = view.k / CAMERA.zoom; // the solo game's self.k
+  const [sx] = toScreen(r.x, r.y);
+  let side, vx, vy;
+  if (Math.abs(sx - view.sw / 2) < view.sw * DEATH.middle) {
+    side = Math.random() < 0.5 ? -1 : 1;
+    vx = side * rand(40, 110) * K;
+    vy = rand(170, 240) * K;
+  } else {
+    side = sx < view.sw / 2 ? -1 : 1;
+    vx = side * 140 * K;
+    vy = 0;
+  }
+  r.fling = { side, vx, vy, down: vy > 0, x: r.x, y: r.y, ox: 0, oy: 0, t: 0 };
+  r.gone = false;
+}
+
+function updateFling(r, dt) {
+  const f = r.fling;
+  const K = view.k / CAMERA.zoom;
+  f.t += dt;
+  f.vx += f.side * DEATH.push * (f.down ? 0.3 : 1) * K * dt;
+  if (f.down) f.vy += DEATH.push * 0.7 * K * dt;
+  f.ox += f.vx * dt;
+  f.oy += f.vy * dt;
+  // the screen offset back into the world (the camera's axes), from where it went down
+  const c = Math.cos(cam.angle), s = Math.sin(cam.angle);
+  r.x = f.x + (c * f.ox - s * f.oy) / view.k;
+  r.y = f.y + (s * f.ox + c * f.oy) / view.k;
+  const [sx, sy] = toScreen(r.x, r.y);
+  if (!onScreen(sx, sy, 160 * K) || f.t > 4) r.gone = true;
+}
+
 // Other planes are shown a moment in the past (INTERP), moving between the positions they sent,
 // so they glide smoothly however unevenly the updates arrive.
 const INTERP = 0.12; // s
@@ -1075,6 +1115,7 @@ function updateRemotes(dt) {
     r.podT = r.podsOut ? Math.min(1, r.podT + dt * 3) : Math.max(0, r.podT - dt * 4);
     r.podScale = r.podsOut ? backOut(r.podT) : r.podT * r.podT;
     r.shieldT = r.shieldHits > 0 ? Math.min(1, r.shieldT + dt * 4) : Math.max(0, r.shieldT - dt * 4);
+    if (r.fling) { if (!r.gone) updateFling(r, dt); continue; }
     const buf = r.buf;
     if (!buf || !buf.length) continue;
     const t = nowWall - r.lag - INTERP * 1000;
@@ -1189,7 +1230,7 @@ function updateBoard(dt) {
 function updateTags() {
   const m = 26;
   for (const r of remotes.values()) {
-    if (!r.seen) { r.tag.style.display = 'none'; r.arrow.style.display = 'none'; continue; }
+    if (!r.seen || r.gone) { r.tag.style.display = 'none'; r.arrow.style.display = 'none'; continue; }
     const [x, y] = toScreen(r.x, r.y);
     const on = onScreen(x, y, 40);
     if (on) {
@@ -1500,6 +1541,8 @@ function frame(t) {
   }
   for (const r of remotes.values()) {
     if (!r.view) continue;
+    r.view.canvas.style.display = r.gone ? 'none' : '';
+    if (r.gone) continue;
     const [sx, sy] = toScreen(r.x, r.y);
     r.view.place(sx, sy, r.heading - cam.angle);
     r.view.pose(r);
@@ -1609,5 +1652,6 @@ if (new URLSearchParams(location.search).has('debug')) {
     get quality() { return qLevel; },
     give(kind) { takePickup({ id: pickupId++, kind: KIND[kind], x: me.x, y: me.y, t: 0 }); },
     fireRocket,
+    die() { goDown('shot', 'test', 'TEST'); },
   };
 }

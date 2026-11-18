@@ -83,7 +83,9 @@ const SEND_HZ = 12;
 // a shot-down plane is blown off the screen like the solo game's enemies (game.luau killEnemy /
 // DEATH): near the middle it goes down and out the bottom edge, veering to a side; near a side, off
 // that side - faster and faster - and it is gone the moment it leaves the screen.
-const DEATH = { middle: 0.17, push: 1500 };
+// shot down: the plane flies on the way it was heading, speeding up (accel, world units/s²) as it
+// falls, and is gone once off the screen (or after life s)
+const DEATH = { accel: 520, life: 2.4 };
 // the camera looks ahead of the plane (so the plane sits low on the screen), follows it, and turns
 // with it a little late. lead: s of travel ahead; ease: follow (1/s); turn: angle catch-up (1/s);
 // zoom: how far out (1 = the game's own scale, smaller = further away)
@@ -469,6 +471,7 @@ function goDown(cause, byId, byName) {
   me.burning = true;
   me.deadT = 0;
   me.hp = 0;
+  me.deathCause = cause;
   net && net.kill(byId || session.id, byName || me.name, me.name, cause);
   if (cause === 'oil') sfx.play('sputter');
   if (cause === 'crash') {
@@ -487,10 +490,15 @@ function goDown(cause, byId, byName) {
 
 function fly(p, dt, ctl) {
   if (p.dead) {
-    // falling: slow down and stop turning; the lose timeline does the rest
-    p.speed += (0 - p.speed) * ease(1.6, dt);
-    p.turn += (0 - p.turn) * ease(2, dt);
+    // shot down: it flies on the way it was heading, speeding up as it falls (the lose timeline
+    // shrinks it), and is gone once off the screen; the camera stays where it went down
+    p.speed += DEATH.accel * dt;
+    p.turn += (0 - p.turn) * ease(4, dt);
     p.deadT += dt;
+    if (p === me && !p.gone) {
+      const [sx, sy] = toScreen(p.x, p.y);
+      if (!onScreen(sx, sy, 160 * view.k / CAMERA.zoom) || p.deadT > DEATH.life) p.gone = true;
+    }
     if (p.deadT > RESPAWN) {
       spawn(p);
       cam.x = p.x; cam.y = p.y; cam.angle = p.heading;
@@ -1050,7 +1058,7 @@ function myState() {
     f: me.shots, pf: me.podShots, po: me.podAmmo > 0 ? 1 : 0,
     rk: me.rockets, rt: me.rocketTarget || '',
     sh: me.shieldHits,
-    d: me.dead, u: me.burning, i: me.spawnShield > 0,
+    d: me.dead, dc: me.dead && me.deathCause === 'crash' ? 1 : 0, u: me.burning, i: me.spawnShield > 0,
     a: Math.round(me.hp),
     s: me.score,
   };
@@ -1066,7 +1074,11 @@ function onPlayers(all) {
       if (performance.now() - joinedAt > 2000) addFeed(`<b>${esc(cleanName(st.n))}</b> joined`);
     }
     const wasDead = r.dead;
-    if (!wasDead && st.d) { r.deadAt = performance.now(); startFling(r); }
+    if (!wasDead && st.d) {
+      r.deadAt = performance.now();
+      if (st.dc) crashRemote(r); // a collision: it blows up where it is
+      else startFling(r); // shot down: it flies on and falls away
+    }
     if (wasDead && !st.d) { r.fling = null; r.gone = false; }
     r.net = st;
     r.name = cleanName(st.n) || 'PILOT';
@@ -1177,26 +1189,10 @@ function crashRemote(r) {
 
 // The solo game's shot-down flight (killEnemy / the dying update), in screen pixels at its scale.
 function startFling(r) {
-  // touching another plane as it went down: a collision - it blows up there instead
-  for (const o of [me, ...remotes.values()]) {
-    if (o !== r && !o.gone && (o === me ? phase === 'play' : o.seen) && Math.hypot(o.x - r.x, o.y - r.y) < 110) {
-      crashRemote(r);
-      return;
-    }
-  }
-  const K = view.k / CAMERA.zoom; // the solo game's self.k
-  const [sx] = toScreen(r.x, r.y);
-  let side, vx, vy;
-  if (Math.abs(sx - view.sw / 2) < view.sw * DEATH.middle) {
-    side = Math.random() < 0.5 ? -1 : 1;
-    vx = side * rand(40, 110) * K;
-    vy = rand(170, 240) * K;
-  } else {
-    side = sx < view.sw / 2 ? -1 : 1;
-    vx = side * 140 * K;
-    vy = 0;
-  }
-  r.fling = { side, vx, vy, down: vy > 0, x: r.x, y: r.y, ox: 0, oy: 0, t: 0 };
+  // it keeps going the way it was flying, faster and faster, falling (the dead timeline shrinks it)
+  const dx = Math.sin(r.heading), dy = -Math.cos(r.heading);
+  const v = Math.max(r.speed || 0, FLIGHT.cruise);
+  r.fling = { dx, dy, v, t: 0 };
   sfx.play('explode', near(r.x, r.y));
   r.gone = false;
 }
@@ -1205,16 +1201,11 @@ function updateFling(r, dt) {
   const f = r.fling;
   const K = view.k / CAMERA.zoom;
   f.t += dt;
-  f.vx += f.side * DEATH.push * (f.down ? 0.3 : 1) * K * dt;
-  if (f.down) f.vy += DEATH.push * 0.7 * K * dt;
-  f.ox += f.vx * dt;
-  f.oy += f.vy * dt;
-  // the screen offset back into the world (the camera's axes), from where it went down
-  const c = Math.cos(cam.angle), s = Math.sin(cam.angle);
-  r.x = f.x + (c * f.ox - s * f.oy) / view.k;
-  r.y = f.y + (s * f.ox + c * f.oy) / view.k;
+  f.v += DEATH.accel * dt;
+  r.x += f.dx * f.v * dt;
+  r.y += f.dy * f.v * dt;
   const [sx, sy] = toScreen(r.x, r.y);
-  if (!onScreen(sx, sy, 160 * K) || f.t > 4) r.gone = true;
+  if (!onScreen(sx, sy, 160 * K) || f.t > DEATH.life) r.gone = true;
 }
 
 // Other planes are shown a moment in the past (INTERP), moving between the positions they sent,
@@ -1381,6 +1372,7 @@ function updateTags() {
 }
 
 function updateCamera(dt) {
+  if (me.dead) return; // (it watches the plane fall away from where it went down)
   const v = me.speed * CAMERA.lead;
   const tx = me.x + Math.sin(me.heading) * v;
   const ty = me.y - Math.cos(me.heading) * v;
@@ -1524,11 +1516,11 @@ function rowAt(x, y) {
   return 0;
 }
 
-// a slider row's level at screen x (the tracks run 88..198 of the row's 270 units)
+// a slider row's level at screen x (the tracks run 88..198 of the row's 330 units)
 function sliderAt(i, x) {
   const r = menuRows()[i - 1];
   if (!r) return null;
-  const u = ((x - r[0]) / (r[2] - r[0])) * 270;
+  const u = ((x - r[0]) / (r[2] - r[0])) * 330;
   return (u - 88) / (198 - 88);
 }
 let dragRow = 0;

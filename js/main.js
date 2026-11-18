@@ -30,17 +30,19 @@ const FLIGHT = {
 
 // The three planes. Guns as in game-airplane-v2 (game.luau fire / enemyFire): muzzles are the
 // barrel tips in artboard units from the plane's centre (-y = nose); bullet speeds in units/s.
+// hit: the plane's outline as an ellipse, [half wingspan, half length] in artboard units
+// (measured from the planes' art), turned with the plane, so wingtips count and empty air doesn't.
 const PLANES = {
   1: {
-    name: 'RED FALCON', hp: 100, speed: 1, radius: 30, dmg: 9,
+    name: 'RED FALCON', hp: 100, speed: 1, hit: [42, 45], dmg: 9,
     pattern: 'pairs', muzzle: 633, spread: 0.01, muzzles: [[-4.0, -27], [3.8, -27]],
   },
   2: {
-    name: 'BLUE HORNET', hp: 85, speed: 1.08, radius: 26, dmg: 6,
+    name: 'BLUE HORNET', hp: 85, speed: 1.08, hit: [37, 32], dmg: 6,
     pattern: 'volley', gap: 0.14, muzzle: 728, spread: 0.03, muzzles: [[-8.8, -33.3], [9.1, -33.3]],
   },
   3: {
-    name: 'GOLD BOMBER', hp: 150, speed: 0.88, radius: 38, dmg: 16,
+    name: 'GOLD BOMBER', hp: 150, speed: 0.88, hit: [55, 47], dmg: 16,
     pattern: 'volley', gap: 0.25, muzzle: 567, spread: 0.03, muzzles: [[-13.2, -32.4], [13.2, -32.4]],
   },
 };
@@ -203,6 +205,8 @@ const me = {
 };
 const remotes = new Map(); // id -> remote player
 const bullets = [];
+const sparks = []; // where bullets struck a plane: { x, y, t }
+const SPARK_LIFE = 0.25;
 
 // --- input ----------------------------------------------------------------------------------
 const keys = new Set();
@@ -423,6 +427,11 @@ function shoot(p, gun, mine) {
 }
 
 function updateBullets(dt) {
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    sparks[i].t += dt;
+    if (sparks[i].t > SPARK_LIFE) sparks.splice(i, 1);
+  }
+  const live = phase === 'play';
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     b.t += dt;
@@ -430,31 +439,52 @@ function updateBullets(dt) {
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     let gone = b.t > BULLET_LIFE;
-    // my bullets against everyone else (the shooter decides hits; the target takes the damage)
-    if (!gone && b.mine && phase === 'play') {
-      for (const r of remotes.values()) {
-        if (r.dead || r.shielded || !r.seen) continue;
-        const rad = PLANES[r.plane].radius;
-        if (segDist(px, py, b.x, b.y, r.x, r.y) < rad) {
-          gone = true;
-          net && net.hit(r.id, b.dmg);
+    if (!gone && live) {
+      // every bullet stops where it touches a plane on this screen. Only my own bullets count:
+      // the shooter decides hits and the target takes the damage; everyone else's bullets just
+      // stop and spark here, so what each player sees matches.
+      for (const p of planesForHits(b.owner)) {
+        const at = touches(px, py, b.x, b.y, p);
+        if (!at) continue;
+        gone = true;
+        sparks.push({ x: at[0], y: at[1], t: 0 });
+        if (p.shielded || p.shield > 0) break; // the spawn shield: a spark, no damage
+        if (b.mine && p !== me) {
+          net && net.hit(p.id, b.dmg);
           me.score += SCORE.hit;
-          r.view && r.view.fire('hit');
-          r.hpShown = Math.max(0, r.hpShown - b.dmg);
-          break;
+          p.view && p.view.fire('hit');
+          p.hpShown = Math.max(0, p.hpShown - b.dmg);
         }
+        break;
       }
     }
     if (gone) bullets.splice(i, 1);
   }
 }
 
-// distance from point (x, y) to the segment a-b (the bullet's path this frame)
-function segDist(ax, ay, bx, by, x, y) {
-  const dx = bx - ax, dy = by - ay;
-  const l2 = dx * dx + dy * dy || 1;
-  const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2));
-  return Math.hypot(ax + dx * t - x, ay + dy * t - y);
+// the planes a bullet can touch: everyone alive except whoever fired it
+function* planesForHits(owner) {
+  if (owner !== me.id && !me.dead && phase === 'play') yield me;
+  for (const r of remotes.values()) {
+    if (r.id !== owner && r.seen && !r.dead) yield r;
+  }
+}
+
+// Where the bullet's path this frame (a -> b) first enters plane p's outline, or null.
+// The outline is an ellipse in the plane's own frame (x across the wings, y along the body).
+function touches(ax, ay, bx, by, p) {
+  const [hw, hl] = PLANES[p.plane].hit;
+  const c = Math.cos(p.heading), s = Math.sin(p.heading);
+  const steps = 4;
+  for (let k = 1; k <= steps; k++) {
+    const x = ax + ((bx - ax) * k) / steps;
+    const y = ay + ((by - ay) * k) / steps;
+    const dx = x - p.x, dy = y - p.y;
+    const lx = dx * c + dy * s; // into the plane's frame (undo its heading)
+    const ly = -dx * s + dy * c;
+    if ((lx * lx) / (hw * hw) + (ly * ly) / (hl * hl) <= 1) return [x, y];
+  }
+  return null;
 }
 
 function updateCamera(dt) {
@@ -681,6 +711,11 @@ function shotsData() {
     if (x < -m || y < -m || x > view.w + m || y > view.h + m) continue;
     out += `${bl.plane} ${(x * u).toFixed(1)} ${(y * u).toFixed(1)} ${bl.dx.toFixed(3)} ${bl.dy.toFixed(3)} ${(bl.muzzle * bl.t * view.k * u).toFixed(1)};`;
   }
+  // impact sparks: kind 4, the last number is how far through its life (0..1)
+  for (const sp of sparks) {
+    const [x, y] = toScene(sp.x, sp.y);
+    out += `4 ${(x * u).toFixed(1)} ${(y * u).toFixed(1)} 0 0 ${(sp.t / SPARK_LIFE).toFixed(2)};`;
+  }
   return out;
 }
 
@@ -834,6 +869,7 @@ async function leaveGame() {
   for (const r of remotes.values()) { r.view && r.view.dispose(); r.tag.remove(); r.arrow.remove(); }
   remotes.clear();
   bullets.length = 0;
+  sparks.length = 0;
   feed.innerHTML = '';
   banner.classList.remove('show');
   selectRow(2);

@@ -526,6 +526,15 @@ function goDown(cause, byId, byName) {
   me.hp = 0;
   me.deathCause = cause;
   odReset();
+  // its power-ups go with it: the panels beside the plane fold away at once (instead of trailing a
+  // plane that is gone)
+  me.podAmmo = 0;
+  me.rktAmmo = 0;
+  me.shieldHits = 0;
+  me.abOrder = [];
+  collects.length = 0;
+  introUntil = 0;
+  if (cause === 'crash') { me.speed = 0; me.turn = 0; } // (blown up where it hit: it stays there)
   net && net.kill(byId || session.id, byName || me.name, me.name, cause);
   if (cause === 'oil') sfx.play('sputter');
   if (cause === 'crash') {
@@ -545,8 +554,9 @@ function goDown(cause, byId, byName) {
 function fly(p, dt, ctl) {
   if (p.dead) {
     // shot down: it flies on the way it was heading, speeding up as it falls (the lose timeline
-    // shrinks it), and is gone once off the screen; the camera stays where it went down
-    p.speed += DEATH.accel * dt;
+    // shrinks it), and is gone once off the screen; the camera stays where it went down. (A crash:
+    // it blew up where it hit and stays there.)
+    if (!(p === me && p.deathCause === 'crash')) p.speed += DEATH.accel * dt;
     p.turn += (0 - p.turn) * ease(4, dt);
     p.deadT += dt;
     if (p === me && !p.gone) {

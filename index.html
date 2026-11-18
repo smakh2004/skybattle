@@ -8,7 +8,7 @@
   <link rel="icon" href="data:," />
   <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
        browsers load the new files at once instead of a cached copy -->
-  <link rel="stylesheet" href="css/style.css?v=12" />
+  <link rel="stylesheet" href="css/style.css?v=13" />
   <script>
     // Static hosting cannot send the cross-origin isolation headers Rive needs for its threads;
     // coi-sw.js adds them. The first visit installs it and reloads once (never in a loop).
@@ -52,7 +52,7 @@
     <div id="feed" aria-live="polite"></div>
     <div id="banner" aria-live="assertive"></div>
     <div id="help">
-      <b>A / D</b> turn &nbsp;·&nbsp; <b>W / S</b> throttle &nbsp;·&nbsp; <b>Space</b> fire &nbsp;·&nbsp; <b>Q</b> rocket &nbsp;·&nbsp; <b>M</b> sound &nbsp;·&nbsp; <b>Esc</b> menu
+      <b>A / D</b> turn &nbsp;·&nbsp; <b>W / S</b> throttle &nbsp;·&nbsp; <b>Space</b> fire &nbsp;·&nbsp; <b>Q</b> rocket &nbsp;·&nbsp; <b>V</b> wide view &nbsp;·&nbsp; <b>M</b> sound &nbsp;·&nbsp; <b>Esc</b> menu
     </div>
 
     <!-- touch controls -->
@@ -71,10 +71,22 @@
       </div>
     </section>
 
+    <!-- connecting to the arena (after PLAY) -->
+    <div id="connect" aria-hidden="true">
+      <div class="cx-core">
+        <div class="cx-ring r1"></div>
+        <div class="cx-ring r2"></div>
+        <div class="cx-ring r3"></div>
+        <div class="cx-hex"></div>
+      </div>
+      <div class="cx-text">CONNECTING TO ARENA</div>
+      <div class="cx-bar"><i></i></div>
+      <div class="cx-sub">SYNCING PILOTS · RADAR LINK</div>
+    </div>
     <div id="loading">Loading…</div>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js?v=12"></script>
+  <script type="module" src="js/main.js?v=13"></script>
 </body>
 </html>

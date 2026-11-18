@@ -42,20 +42,33 @@ class FirebaseNet {
     this.offs = [];
   }
 
+  // Loading Firebase and signing in take a moment: done while the menu is up, so PLAY is quick.
+  prepare() {
+    if (!this.ready) {
+      this.ready = (async () => {
+        const [{ initializeApp }, auth, db] = await Promise.all([
+          import(FB + 'firebase-app.js'),
+          import(FB + 'firebase-auth.js'),
+          import(FB + 'firebase-database.js'),
+        ]);
+        this.db = db;
+        const app = this.app || (this.app = initializeApp(this.config));
+        // the sign-in lives in this tab's sessionStorage: each tab / window is its own player
+        // (with the default, every window of a browser would share one id and hide each other)
+        this.auth = this.auth || auth.initializeAuth(app, { persistence: auth.browserSessionPersistence });
+        const cred = await auth.signInAnonymously(this.auth);
+        this.database = db.getDatabase(app);
+        return cred.user.uid;
+      })();
+      this.ready.catch(() => { this.ready = null; });
+    }
+    return this.ready;
+  }
+
   async join({ name, plane }) {
-    const [{ initializeApp }, auth, db] = await Promise.all([
-      import(FB + 'firebase-app.js'),
-      import(FB + 'firebase-auth.js'),
-      import(FB + 'firebase-database.js'),
-    ]);
-    this.db = db;
-    const app = this.app || (this.app = initializeApp(this.config));
-    // the sign-in lives in this tab's sessionStorage: each tab / window is its own player
-    // (with the default, every window of a browser would share one id and hide each other)
-    this.auth = this.auth || auth.initializeAuth(app, { persistence: auth.browserSessionPersistence });
-    const cred = await auth.signInAnonymously(this.auth);
-    const uid = (this.uid = cred.user.uid);
-    const d = (this.database = db.getDatabase(app));
+    const uid = (this.uid = await this.prepare());
+    const db = this.db;
+    const d = this.database;
     const { ref, set, onDisconnect, onValue, onChildAdded, remove, query, limitToLast } = db;
 
     // leaving (closing the tab, losing the connection) removes the plane
@@ -117,6 +130,8 @@ class FirebaseNet {
 
 // --- Local (tabs / windows of this browser) -------------------------------------------------
 class LocalNet {
+  prepare() { return Promise.resolve(this.id); }
+
   constructor() {
     this.mode = 'local';
     this.id = Math.random().toString(36).slice(2, 10);

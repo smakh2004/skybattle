@@ -88,6 +88,11 @@ const DEATH = { middle: 0.17, push: 1500 };
 // with it a little late. lead: s of travel ahead; ease: follow (1/s); turn: angle catch-up (1/s);
 // zoom: how far out (1 = the game's own scale, smaller = further away)
 const CAMERA = { lead: 1.0, ease: 3.2, turn: 2.0, zoom: 0.62 };
+// V: the wide view - the camera pulls out (see more of the sky) for a few seconds, then comes back
+const WIDE = { zoom: 0.6, hold: 4, ease: 3, cooldown: 6 };
+let wideT = 0; // s of wide view left
+let wideCd = 0; // s until V works again
+let zoomMul = 1; // the camera's pull-out now (1 normal)
 
 // --- dom ------------------------------------------------------------------------------------
 const $ = (s) => document.querySelector(s);
@@ -107,7 +112,8 @@ const rand = (lo, hi) => lo + Math.random() * (hi - lo);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const cleanName = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '').replace(/\s+/g, ' ').trim().slice(0, 16);
+const NAME_MAX = 12; // letters in a name (it fits the menu's button)
+const cleanName = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX);
 const backOut = (t) => { const c1 = 1.70158, u = t - 1; return 1 + (c1 + 1) * u * u * u + c1 * u * u; };
 
 // the body colours turned by `deg` degrees of hue: [[r, g, b] x 13]
@@ -209,9 +215,9 @@ class PlaneView {
     });
   }
   /** Place on screen (css px, centre) and turn it (radians, screen). */
-  place(x, y, rot) {
+  place(x, y, rot, scale = 1) {
     const h = this.size / 2;
-    this.canvas.style.transform = `translate(${x - h}px, ${y - h}px) rotate(${rot}rad)`;
+    this.canvas.style.transform = `translate(${x - h}px, ${y - h}px) rotate(${rot}rad) scale(${scale})`;
   }
   /** The game draws planes at k x their artboard. The artboard is 320 units: the plane in the
    * middle with room around it for its smoke and explosion, so they are never cut off. */
@@ -244,7 +250,7 @@ class PlaneView {
 }
 
 // --- state ----------------------------------------------------------------------------------
-const view = { sw: innerWidth, sh: innerHeight, unit: 1, k: 1 };
+const view = { sw: innerWidth, sh: innerHeight, unit: 1, k: 1, baseK: 1 };
 const cam = { x: 0, y: 0, angle: 0 };
 let phase = 'menu'; // 'menu' | 'joining' | 'play'
 let net = null;
@@ -320,7 +326,8 @@ addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'Escape') leaveGame();
   if (e.code === 'KeyQ') fireRocket();
-  if (e.code === 'KeyM') sfx.toggleMute();
+  if (e.code === 'KeyV' && wideCd <= 0 && !me.dead) { wideT = WIDE.hold; wideCd = WIDE.hold + WIDE.cooldown; }
+  if (e.code === 'KeyM') { SETTINGS.sound = !SETTINGS.sound; saveSettings(); }
   if (e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -439,6 +446,7 @@ function spawn(p) {
   p.hp = MAX_HP;
   p.oil = OIL.max;
   p.dead = false;
+  p.gone = false;
   p.burning = false;
   p.spawnShield = SPAWN_SHIELD;
   p.lastBy = null;
@@ -463,8 +471,14 @@ function goDown(cause, byId, byName) {
   me.hp = 0;
   net && net.kill(byId || session.id, byName || me.name, me.name, cause);
   if (cause === 'oil') sfx.play('sputter');
-  sfx.play('explode_big');
-  setTimeout(() => sfx.play('splash'), 950); // it hits the water
+  if (cause === 'crash') {
+    // a collision: my plane blows up right here and is gone
+    crashBurst(me.x, me.y);
+    me.gone = true;
+  } else {
+    sfx.play('explode_big');
+    setTimeout(() => sfx.play('splash'), 950); // it hits the water
+  }
   if (cause === 'oil') showBanner('OUT OF OIL<small>THE ENGINE STOPPED</small>', RESPAWN);
   else if (cause === 'crash') showBanner(`COLLISION<small>WITH ${esc(byName)}</small>`, RESPAWN);
   else showBanner(`SHOT DOWN<small>BY ${esc(byName)}</small>`, RESPAWN);
@@ -1073,12 +1087,12 @@ function cullViews() {
       canvas.className = 'plane';
       planesLayer.appendChild(canvas);
       const v = new PlaneView(canvas);
-      v.resize(view.k);
+      v.resize(view.baseK);
       v.load().then(() => {
         r.loading = false;
         if (!remotes.has(r.id)) { v.dispose(); return; }
         r.view = v;
-        v.resize(view.k);
+        v.resize(view.baseK);
       }).catch((e) => { r.loading = false; canvas.remove(); console.warn('remote plane', e); });
     } else if (d > near + 600 && r.view) {
       r.view.dispose();
@@ -1087,8 +1101,33 @@ function cullViews() {
   }
 }
 
+// A collision: the plane blows up right there and is gone at once (no flight off the screen).
+function crashBurst(x, y) {
+  rings.push({ x, y, t: 0, max: 0.45, r: 120 });
+  for (let i = 0; i < 12; i++) sparks.push({ x: x + rand(-26, 26), y: y + rand(-26, 26), t: rand(0, 0.1) });
+  for (let i = 0; i < 14; i++) {
+    smoke.push({ x: x + rand(-18, 18), y: y + rand(-18, 18), vx: rand(-30, 30), vy: rand(-30, 30), t: 0,
+      life: rand(1.2, 2), r0: 8, r1: rand(26, 40), a: 0.55, light: false });
+  }
+  sfx.play('explode_big', near(x, y));
+}
+
+function crashRemote(r) {
+  if (r.gone) return;
+  crashBurst(r.x, r.y);
+  r.fling = null;
+  r.gone = true;
+}
+
 // The solo game's shot-down flight (killEnemy / the dying update), in screen pixels at its scale.
 function startFling(r) {
+  // touching another plane as it went down: a collision - it blows up there instead
+  for (const o of [me, ...remotes.values()]) {
+    if (o !== r && !o.gone && (o === me ? phase === 'play' : o.seen) && Math.hypot(o.x - r.x, o.y - r.y) < 110) {
+      crashRemote(r);
+      return;
+    }
+  }
   const K = view.k / CAMERA.zoom; // the solo game's self.k
   const [sx] = toScreen(r.x, r.y);
   let side, vx, vy;
@@ -1207,6 +1246,10 @@ function onKill(k) {
     return;
   }
   if (cause === 'crash') {
+    for (const id of [k.by, k.to]) {
+      const r = remotes.get(id);
+      if (r) crashRemote(r);
+    }
     const pair = [k.by, k.to].sort().join('|');
     const now = performance.now();
     if (now - (crashSeen.get(pair) || -1e9) < 4000) return;
@@ -1321,10 +1364,11 @@ function measure() {
   }
   const mobile = matchMedia('(pointer: coarse)').matches;
   const gameK = Math.min(3.2, Math.max(mobile ? 1.2 : 0.72, Math.min(view.sw, view.sh) / 400));
-  view.k = gameK * CAMERA.zoom;
+  view.baseK = gameK * CAMERA.zoom;
+  view.k = view.baseK * zoomMul;
   if (shots) shots.resizeDrawingSurfaceToCanvas(Math.min(devicePixelRatio || 1, 1.5) * Q().world);
-  me.view && me.view.resize(view.k);
-  for (const r of remotes.values()) r.view && r.view.resize(view.k);
+  me.view && me.view.resize(view.baseK);
+  for (const r of remotes.values()) r.view && r.view.resize(view.baseK);
   if (menuPlane) menuPlane.setSize(Math.round($('#menuPlane').clientWidth || 300));
   bendMenu();
 }
@@ -1335,18 +1379,47 @@ addEventListener('resize', measure);
 // confirms, as in the game; typing on the name button writes the name; the mouse and taps work too.
 let menuPlane = null;
 let menuSel = 1;
-let menuList = false;
+let menuPage = 0; // 0 the main page, 1 settings
+// the settings, kept on this computer: sound on, SFX and MUSIC levels (0..1)
+const SETTINGS = { sound: true, sfx: 1, music: 1 };
+try { Object.assign(SETTINGS, JSON.parse(localStorage.getItem('skyblitz.settings') || '{}')); } catch {}
+function saveSettings() {
+  try { localStorage.setItem('skyblitz.settings', JSON.stringify(SETTINGS)); } catch {}
+  sfx.setMuted(!SETTINGS.sound);
+  sfx.levels(SETTINGS.sfx, SETTINGS.music);
+}
+const qualityName = () => ['LOW', 'MEDIUM', 'HIGH'][qLevel];
+let qManual = false;
+try { qManual = localStorage.getItem('skyblitz.qmanual') === '1'; } catch {}
 let menuPress = 0;
 let menuT = 0;
 let menuFireT = 1;
+const menuMotion = { phase: 'rest', t: 0.5, lean: 0, ox: 0, rate: 2, bank: 0, pitch: 0, burst: 0.6, gunT: 0 };
 const menuEl = $('#menu');
 
 function setSel(i, sound = true) {
-  i = ((i - 1 + 3) % 3) + 1;
   if (i !== menuSel && sound) sfx.play('ui_move');
   menuSel = i;
-  if (menuSel === 1) focusName();
+  if (menuSel === 1 && menuPage === 0) focusName();
   else if (document.activeElement === nameInput) nameInput.blur();
+}
+// a step up or down the page's buttons (they stop at the ends, as in the game: GFX.navStep)
+function navStep(up) {
+  const order = menuPage === 0 ? [1, 2, 3] : SETTINGS.sound ? [1, 4, 5, 2, 3] : [1, 2, 3];
+  const i = Math.max(0, order.indexOf(menuSel));
+  setSel(order[clamp(i + (up ? -1 : 1), 0, order.length - 1)]);
+}
+function openPage(page, sel) {
+  menuPage = page;
+  menuSel = sel;
+  if (page === 1 && document.activeElement === nameInput) nameInput.blur();
+}
+// a slider: a step (keyboard) or a level from the pointer
+function slide(row, v) {
+  if (!SETTINGS.sound) return;
+  const key = row === 4 ? 'sfx' : 'music';
+  const nv = clamp(Math.round(v * 20) / 20, 0, 1);
+  if (nv !== SETTINGS[key]) { SETTINGS[key] = nv; saveSettings(); sfx.play('ui_move'); }
 }
 
 // the buttons on screen, as the overlay drew them (css px)
@@ -1368,9 +1441,22 @@ function focusName() {
 function pressRow(i) {
   if (phase !== 'menu') return;
   menuPress += 1;
+  if (menuPage === 1) {
+    if (i === 1) { SETTINGS.sound = !SETTINGS.sound; saveSettings(); sfx.play('ui_press'); }
+    else if (i === 2) {
+      // QUALITY: HIGH -> MEDIUM -> LOW -> HIGH; picked by hand, the automatic step-down stops
+      qLevel = (qLevel + 2) % 3;
+      qManual = true;
+      try { localStorage.setItem('skyblitz.quality', String(qLevel)); localStorage.setItem('skyblitz.qmanual', '1'); } catch {}
+      setWorld('quality', Q().detail);
+      measure();
+      sfx.play('ui_press');
+    } else if (i === 3) { sfx.play('ui_press'); openPage(0, 3); }
+    return;
+  }
   if (i === 1) { sfx.play('ui_press'); focusName(); }
   else if (i === 2) joinGame();
-  else { menuList = !menuList; sfx.play('ui_press'); }
+  else { sfx.play('ui_press'); openPage(1, 1); }
 }
 
 function rowAt(x, y) {
@@ -1382,7 +1468,16 @@ function rowAt(x, y) {
   return 0;
 }
 
+// a slider row's level at screen x (the tracks run 88..198 of the row's 270 units)
+function sliderAt(i, x) {
+  const r = menuRows()[i - 1];
+  if (!r) return null;
+  const u = ((x - r[0]) / (r[2] - r[0])) * 270;
+  return (u - 88) / (198 - 88);
+}
+let dragRow = 0;
 menuEl.addEventListener('pointermove', (e) => {
+  if (dragRow) { const v = sliderAt(dragRow, e.clientX); if (v !== null) slide(dragRow, v); return; }
   const i = rowAt(e.clientX, e.clientY);
   if (i && i !== menuSel) setSel(i);
 });
@@ -1391,10 +1486,17 @@ menuEl.addEventListener('pointerdown', (e) => {
   if (!i) return;
   e.preventDefault();
   if (i !== menuSel) setSel(i);
+  if (menuPage === 1 && i > 3) {
+    dragRow = i;
+    const v = sliderAt(i, e.clientX);
+    if (v !== null) slide(i, v);
+    return;
+  }
   pressRow(i);
 });
+addEventListener('pointerup', () => { dragRow = 0; });
 nameInput.addEventListener('input', () => {
-  const v = nameInput.value.toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '').slice(0, 16);
+  const v = nameInput.value.toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '').slice(0, NAME_MAX);
   if (v !== nameInput.value) nameInput.value = v;
   setStatus('');
 });
@@ -1402,16 +1504,20 @@ nameInput.addEventListener('focus', () => { if (menuSel !== 1) setSel(1); });
 
 addEventListener('keydown', (e) => {
   if (phase !== 'menu') return;
-  const typing = menuSel === 1;
+  const typing = menuSel === 1 && menuPage === 0;
   if (e.code === 'Enter') {
     e.preventDefault();
-    if (menuSel === 1) setSel(2); // the name is in: on to PLAY
-    else pressRow(menuSel);
+    if (typing) setSel(2); // the name is in: on to PLAY
+    else if (!(menuPage === 1 && menuSel > 3)) pressRow(menuSel);
     return;
   }
-  if (e.code === 'ArrowDown' || (!typing && e.code === 'KeyS')) { e.preventDefault(); setSel(menuSel + 1); }
-  else if (e.code === 'ArrowUp' || (!typing && e.code === 'KeyW')) { e.preventDefault(); setSel(menuSel - 1); }
-  else if (e.code === 'KeyM' && !typing) sfx.toggleMute();
+  if (e.code === 'Escape' && menuPage === 1) { sfx.play('ui_press'); openPage(0, 3); return; }
+  if (e.code === 'ArrowDown' || (!typing && e.code === 'KeyS')) { e.preventDefault(); navStep(false); }
+  else if (e.code === 'ArrowUp' || (!typing && e.code === 'KeyW')) { e.preventDefault(); navStep(true); }
+  else if (menuPage === 1 && menuSel > 3 && (e.code === 'ArrowLeft' || e.code === 'KeyA' || e.code === 'ArrowRight' || e.code === 'KeyD')) {
+    const dir = e.code === 'ArrowLeft' || e.code === 'KeyA' ? -1 : 1;
+    slide(menuSel, SETTINGS[menuSel === 4 ? 'sfx' : 'music'] + dir * 0.1);
+  }
 });
 
 function setStatus(text, err = false) {
@@ -1561,7 +1667,7 @@ async function joinGame() {
   if (phase !== 'menu') return;
   const name = cleanName(nameInput.value);
   if (name.length < 2) {
-    setStatus('TYPE YOUR NAME (2-16 LETTERS)', true);
+    setStatus(`TYPE YOUR NAME (2-${NAME_MAX} LETTERS)`, true);
     setSel(1);
     return;
   }
@@ -1569,7 +1675,7 @@ async function joinGame() {
   sfx.play('ui_start');
   try { localStorage.setItem('skyblitz.name', name); } catch {}
   phase = 'joining';
-  setStatus('JOINING…');
+  stage.dataset.phase = 'joining';
   try {
     net = net || await createNet();
     net.onPlayers = onPlayers;
@@ -1581,6 +1687,7 @@ async function joinGame() {
     console.error('join failed', e);
     setStatus('COULD NOT JOIN: ' + (e && e.message ? e.message : e), true);
     phase = 'menu';
+    stage.dataset.phase = 'menu';
     return;
   }
   setStatus('');
@@ -1619,8 +1726,7 @@ async function leaveGame() {
   collects.length = 0;
   feed.innerHTML = '';
   banner.classList.remove('show');
-  menuList = false;
-  setSel(2, false);
+  openPage(0, 2);
 }
 
 // --- quality monitor ---------------------------------------------------------------------------
@@ -1632,7 +1738,7 @@ function watchFrames(dtMs) {
   if (perf.n < 120) return;
   const slow = perf.slow / perf.n > 0.5;
   perf.n = perf.slow = 0;
-  if (slow && qLevel > 0) {
+  if (slow && qLevel > 0 && !qManual) {
     qLevel -= 1;
     try { localStorage.setItem('skyblitz.quality', String(qLevel)); } catch {}
     console.info('quality ->', ['low', 'medium', 'high'][qLevel]);
@@ -1662,6 +1768,12 @@ function frame(t) {
     updateMissiles(dt);
     updateBullets(dt);
     updateCamera(dt);
+    // the wide view: out for WIDE.hold seconds, then back in
+    wideT = Math.max(0, wideT - dt);
+    wideCd = Math.max(0, wideCd - dt);
+    const zWant = wideT > 0 ? WIDE.zoom : 1;
+    zoomMul += (zWant - zoomMul) * ease(WIDE.ease, dt);
+    view.k = view.baseK * zoomMul;
     sendT -= dt;
     if (sendT <= 0 && net) {
       sendT = 1 / SEND_HZ;
@@ -1677,13 +1789,43 @@ function frame(t) {
     updateBullets(dt);
     updateMissiles(dt);
     if (menuPlane) {
-      menuPlane.num('bank', +(Math.sin(menuT * 0.7) * 0.45).toFixed(3));
-      menuPlane.num('pitch', 0);
+      const m = menuMotion;
+      m.t -= dt;
+      if (m.t <= 0) {
+        if (m.phase === 'rest') {
+          const pick = Math.floor(Math.random() * 4);
+          const amount = rand(0.6, 1);
+          m.lean = pick === 0 ? -amount : pick === 1 ? amount : 0;
+          m.ox = pick === 2 ? -amount : pick === 3 ? amount : 0;
+          m.rate = rand(1.8, 3.2);
+          m.t = rand(1.1, 2);
+          m.phase = 'move';
+        } else {
+          m.lean = m.ox = 0;
+          m.rate = rand(1.8, 3);
+          m.t = rand(1.6, 2.6);
+          m.phase = 'rest';
+        }
+      }
+      const step = (v, to) => (v < to ? Math.min(to, v + m.rate * dt) : Math.max(to, v - m.rate * dt));
+      m.bank = step(m.bank, m.lean);
+      m.pitch = step(m.pitch, m.ox);
+      menuPlane.num('bank', +m.bank.toFixed(3));
+      menuPlane.num('pitch', +m.pitch.toFixed(3));
       menuPlane.bool('burning', false);
       menuPlane.bool('dead', false);
       menuPlane.colors(0);
+      // now and then a short burst of fire
       menuFireT -= dt;
-      if (menuFireT <= 0) { menuFireT = rand(1.4, 2.6); menuPlane.fire('fire'); }
+      if (menuFireT <= 0) {
+        if (menuFireT > -m.burst) {
+          m.gunT -= dt;
+          if (m.gunT <= 0) { m.gunT = 0.11 * rand(2.3, 2.9); menuPlane.fire('fire'); }
+        } else {
+          menuFireT = rand(1.3, 3.4);
+          m.burst = rand(0.35, 1.1);
+        }
+      }
     }
   }
   updateSmoke(dt);
@@ -1691,17 +1833,18 @@ function frame(t) {
   // planes -> their Rive instances (screen space: turned by the camera)
   if (me.view) {
     const [sx, sy] = toScreen(me.x, me.y);
-    me.view.place(sx, sy, me.heading - cam.angle);
+    me.view.place(sx, sy, me.heading - cam.angle, zoomMul);
+    me.view.canvas.style.display = me.gone ? 'none' : '';
     me.view.pose(me);
     me.view.canvas.classList.toggle('blink', me.spawnShield > 0 && !me.dead);
-    me.view.canvas.classList.toggle('top', performance.now() < introUntil);
+    me.view.canvas.classList.toggle('top', performance.now() < introUntil || collects.length > 0);
   }
   for (const r of remotes.values()) {
     if (!r.view) continue;
     r.view.canvas.style.display = r.gone ? 'none' : '';
     if (r.gone) continue;
     const [sx, sy] = toScreen(r.x, r.y);
-    r.view.place(sx, sy, r.heading - cam.angle);
+    r.view.place(sx, sy, r.heading - cam.angle, zoomMul);
     r.view.pose(r);
     r.view.canvas.classList.toggle('blink', r.shielded && !r.dead);
   }
@@ -1736,6 +1879,7 @@ function frame(t) {
     const u = view.unit;
     const [mx, my] = toScreen(me.x, me.y);
     setShots('k', view.k * u);
+    setShots('hudK', view.baseK / CAMERA.zoom * u);
     setShots('hud', phase === 'play' ? 1 : 0);
     setShots('hp', Math.round(me.hp));
     setShots('score', me.score);
@@ -1748,13 +1892,18 @@ function frame(t) {
     setShots('introKind', introKind);
     setShots('introSeq', introSeq);
     setShots('ax', +(me.bank * 0.7).toFixed(2));
-    setShots('menu', phase === 'play' ? 0 : 1);
+    setShots('menu', phase === 'menu' ? 1 : 0); // (it slides away while connecting)
     setShots('menuSel', menuSel);
-    setShots('menuList', menuList ? 1 : 0);
     setShots('menuPress', menuPress);
+    setShots('menuPage', menuPage);
+    setShots('soundOn', SETTINGS.sound ? 1 : 0);
+    setShots('sfxVol', SETTINGS.sfx);
+    setShots('musicVol', SETTINGS.music);
+    const qp = svm.string('qualityText');
+    if (qp && qp.value !== qualityName()) qp.value = qualityName();
     setShots('mobile', matchMedia('(pointer: coarse)').matches ? 1 : 0);
     const typed = cleanName(nameInput.value);
-    const caret = menuSel === 1 && phase !== 'play' && Math.floor(t / 530) % 2 === 0 ? '|' : '';
+    const caret = menuSel === 1 && menuPage === 0 && phase !== 'play' && Math.floor(t / 530) % 2 === 0 ? '|' : '';
     const nameText = (typed || (caret ? '' : 'YOUR NAME')) + caret;
     const np = svm.string('nameText');
     if (np && np.value !== nameText) np.value = nameText;
@@ -1799,10 +1948,12 @@ async function boot() {
     measure();
     if (menuSel === 1) setTimeout(focusName, 300);
     sfx.music(true);
+    saveSettings();
     $('#loading').classList.add('done');
     requestAnimationFrame(frame);
     createNet().then((n) => {
       net = net || n;
+      net.prepare().catch((e) => console.warn('connect', e)); // ahead of PLAY
       if (net.mode === 'local') setStatus('OFFLINE TEST MODE · OPEN MORE WINDOWS TO PLAY TOGETHER');
     }).catch((e) => console.warn('net', e));
   } catch (e) {

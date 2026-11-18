@@ -19,6 +19,8 @@ export function createSound(version) {
   let musicSrc = null;
   let musicGain = null;
   let wantMusic = false;
+  let sfxLevel = 1;
+  let musicLevel = 1;
   let muted = false;
   try { muted = localStorage.getItem('skyblitz.muted') === '1'; } catch {}
 
@@ -58,7 +60,7 @@ export function createSound(version) {
     const src = ctx.createBufferSource();
     src.buffer = buffers[name];
     const g = ctx.createGain();
-    g.gain.value = t[0] * scale;
+    g.gain.value = t[0] * scale * sfxLevel;
     src.connect(g).connect(master);
     src.start();
   }
@@ -69,7 +71,7 @@ export function createSound(version) {
     if (!ctx || !buffers.music) return;
     if (on && !musicSrc) {
       musicGain = ctx.createGain();
-      musicGain.gain.value = MUSIC_VOL;
+      musicGain.gain.value = MUSIC_VOL * musicLevel;
       musicSrc = ctx.createBufferSource();
       musicSrc.buffer = buffers.music;
       musicSrc.loop = true;
@@ -81,6 +83,17 @@ export function createSound(version) {
     }
   }
 
+  /** The settings' SFX and MUSIC sliders (0..1). */
+  function levels(sfx, mus) {
+    sfxLevel = sfx;
+    musicLevel = mus;
+    if (musicGain) musicGain.gain.value = MUSIC_VOL * musicLevel;
+  }
+
+  function setMuted(m) {
+    if (m !== muted) toggleMute();
+  }
+
   function toggleMute() {
     muted = !muted;
     try { localStorage.setItem('skyblitz.muted', muted ? '1' : '0'); } catch {}
@@ -88,5 +101,5 @@ export function createSound(version) {
     return muted;
   }
 
-  return { play, music, toggleMute, get muted() { return muted; } };
+  return { play, music, toggleMute, setMuted, levels, get muted() { return muted; } };
 }

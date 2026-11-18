@@ -1484,10 +1484,16 @@ function updateCamera(dt, p = me, shift = 0) {
   // extra lag, so the plane keeps its place on the screen instead of sliding down under the HUD)
   const sp = p.speed || 0;
   const ce = CAMERA.ease;
-  // the camera's steady lead ahead of the plane is v - sp / ce; above the throttle's top speed it is
-  // held at the cruise one (so a BOOST keeps the plane where it flies normally)
-  const ahead = (sp > FLIGHT.boost ? FLIGHT.cruise : Math.min(sp, FLIGHT.boost)) * (CAMERA.lead - 1 / ce);
-  const v = sp > FLIGHT.boost ? ahead + sp / ce : sp * CAMERA.lead;
+  // the camera's steady lead ahead of the plane is v - sp / ce. Up to the throttle's top speed it is
+  // the game's (sp x (lead - 1/ce)); above it (BOOST) it eases smoothly back to the cruise one, so the
+  // plane keeps its place - continuous in the speed, so nothing jumps as the speed changes.
+  const k1 = CAMERA.lead - 1 / ce;
+  let ahead = Math.min(sp, FLIGHT.boost) * k1;
+  if (sp > FLIGHT.boost) {
+    const u = Math.min(1, (sp - FLIGHT.boost) / (BOOST.speed - FLIGHT.boost));
+    ahead += (FLIGHT.cruise - FLIGHT.boost) * k1 * u * u * (3 - 2 * u);
+  }
+  const v = ahead + sp / ce;
   const c = Math.cos(cam.angle), sn = Math.sin(cam.angle);
   const tx = p.x + Math.sin(p.heading) * v - (c * shift) / view.k;
   const ty = p.y - Math.cos(p.heading) * v - (sn * shift) / view.k;

@@ -79,6 +79,42 @@ const BOARD_ROWS = 8; // the scoreboard shows the top 8 (and you, if you are low
 const RESPAWN = 3; // s after going down
 const SPAWN_SHIELD = 2.5; // s of invulnerability after (re)spawning
 const SCORE = { hit: 10, kill: 100 };
+// OVERDRIVE (the solo game's beast mode, beast.luau): kills - more in a quick combo - and hits fill the
+// meter (the glowing line along the bottom); full, OVERDRIVE runs for OD.time s: the guns fire twice
+// as fast in a spread, the aim cone widens, kills score double. (Fills faster than the solo game's:
+// players are fewer than its waves of bots.)
+const OD = { time: 8, comboGap: 4, kill: 0.3, perCombo: 0.05, hit: 0.012, drain: 0.01, spread: 0.06, cone: 0.12 };
+const od = { meter: 0, t: 0, bt: 99, combo: 0, comboT: 0 };
+function odReset() { od.meter = od.t = od.combo = od.comboT = 0; od.bt = 99; }
+function odKill() {
+  od.combo += 1;
+  od.comboT = OD.comboGap;
+  if (od.t <= 0) od.meter = Math.min(1, od.meter + OD.kill + OD.perCombo * Math.min(od.combo, 8));
+  return od.t > 0 ? 2 : 1;
+}
+function odTick(dt) {
+  od.bt = Math.min(99, od.bt + dt);
+  if (od.comboT > 0) { od.comboT -= dt; if (od.comboT <= 0) od.combo = 0; }
+  if (od.t > 0) { od.t = Math.max(0, od.t - dt); od.meter = od.t / OD.time; return; }
+  if (od.meter >= 1) {
+    od.t = OD.time;
+    od.bt = 0;
+    sfx.play('shield_up');
+    sfx.play('ui_start');
+    showBanner('BEAST MODE', 'OVERDRIVE');
+    return;
+  }
+  od.meter = Math.max(0, od.meter - OD.drain * dt);
+}
+// the camera at OVERDRIVE's start: in close on the plane, then back out (BEAST.camZoom)
+function odZoom() {
+  const bt = od.bt, Z = 1.32;
+  if (bt >= 1.6) return 1;
+  if (bt < 0.45) { const u = bt / 0.45; return 1 + (Z - 1) * (1 - (1 - u) ** 3); }
+  if (bt < 0.8) return Z;
+  const u = (bt - 0.8) / 0.8;
+  return Z + (1 - Z) * (u * u * (3 - 2 * u));
+}
 const SEND_HZ = 12;
 // a shot-down plane is blown off the screen like the solo game's enemies (game.luau killEnemy /
 // DEATH): near the middle it goes down and out the bottom edge, veering to a side; near a side, off
@@ -479,6 +515,7 @@ function goDown(cause, byId, byName) {
   me.deadT = 0;
   me.hp = 0;
   me.deathCause = cause;
+  odReset();
   net && net.kill(byId || session.id, byName || me.name, me.name, cause);
   if (cause === 'oil') sfx.play('sputter');
   if (cause === 'crash') {
@@ -551,7 +588,7 @@ function guns(p, dt, wantFire) {
     }
   }
   if (!wantFire || p.gunT > 0) return;
-  const interval = 0.11 * rand(2.3, 2.9);
+  const interval = 0.11 * rand(2.3, 2.9) * (p === me && od.t > 0 ? 0.5 : 1);
   const first = p.shots % 2; // alternate, so the others can tell which gun fired
   shoot(p, first, true);
   p.shots += 1;
@@ -583,7 +620,7 @@ function podVolley(p, mine) {
 // (its lead point) and curve onto it.
 const AIM = { cone: (12 * Math.PI) / 180, podCone: (24 * Math.PI) / 180, range: 760, turn: 5.5 };
 function aimTarget(p, pod) {
-  const cone = pod || p.podAmmo > 0 ? AIM.podCone : AIM.cone;
+  const cone = (pod || p.podAmmo > 0 ? AIM.podCone : AIM.cone) + (p === me && od.t > 0 ? OD.cone : 0);
   let best = null, bestS = Infinity;
   for (const e of planesForHits(p.id)) {
     if (e.gone || e.fling) continue;
@@ -614,12 +651,14 @@ function shoot(p, gun, mine, pod = false) {
   const c = Math.cos(p.heading), sn = Math.sin(p.heading);
   const gx = p.x + mx * c - my * sn, gy = p.y + mx * sn + my * c;
   const tgt = aimTarget(p, pod);
+  const hot = mine && od.t > 0; // (OVERDRIVE: a spread of shots, a wider cone)
   let a = p.heading + rand(-GUN.spread, GUN.spread) * (pod ? 2 : 1);
   if (tgt) {
     const [tx, ty] = leadPoint(gx, gy, tgt);
-    const cone = pod || p.podAmmo > 0 ? AIM.podCone : AIM.cone;
+    const cone = (pod || p.podAmmo > 0 ? AIM.podCone : AIM.cone) + (hot ? OD.cone : 0);
     a = p.heading + clamp(wrapAngle(Math.atan2(tx - gx, -(ty - gy)) - p.heading), -cone, cone);
   }
+  if (hot) a += rand(-OD.spread, OD.spread);
   bullets.push({
     tgt,
     owner: p.id,
@@ -867,6 +906,7 @@ function updateBullets(dt) {
         if (b.mine && p !== me) {
           sfx.play('hit_enemy');
           net && net.hit(p.id, b.dmg);
+          if (od.t <= 0) od.meter = Math.min(1, od.meter + OD.hit);
           if (!p.shieldHits) {
             me.score += SCORE.hit;
             p.view && p.view.fire('hit');
@@ -1286,6 +1326,7 @@ function onHit({ by, dmg, crash }) {
     return;
   }
   me.hp = Math.max(0, me.hp - (+dmg || 0));
+  od.combo = 0; // (a hit breaks the combo)
   sfx.play('hit_player');
   me.view && me.view.fire('hit');
   if (me.hp <= 0) goDown('shot', by, killer ? killer.name : 'PILOT');
@@ -1312,8 +1353,9 @@ function onKill(k) {
     return;
   }
   if (k.by === session.id) {
-    me.score += SCORE.kill;
-    showBanner(`YOU SHOT DOWN ${cleanName(k.toName)}`, `+${SCORE.kill}`);
+    const pts = SCORE.kill * odKill();
+    me.score += pts;
+    showBanner(`YOU SHOT DOWN ${cleanName(k.toName)}`, `+${pts}`);
   }
   addFeed(`<b>${esc(cleanName(k.byName))}</b> shot down ${esc(cleanName(k.toName))}`);
 }
@@ -1874,6 +1916,7 @@ async function joinGame() {
   bullets.length = 0;
   missiles.length = 0;
   spawn(me);
+  odReset();
   cam.x = me.x; cam.y = me.y; cam.angle = me.heading;
   phase = 'play';
   joinedAt = performance.now();
@@ -1951,7 +1994,8 @@ function frame(t) {
     wideCd = Math.max(0, wideCd - dt);
     const zWant = wideT > 0 ? WIDE.zoom : 1;
     zoomMul += (zWant - zoomMul) * ease(WIDE.ease, dt);
-    view.k = view.baseK * zoomMul;
+    if (!me.dead) odTick(dt);
+    view.k = view.baseK * zoomMul * odZoom();
     sendT -= dt;
     if (sendT <= 0 && net) {
       sendT = 1 / SEND_HZ;
@@ -2020,7 +2064,7 @@ function frame(t) {
   // planes -> their Rive instances (screen space: turned by the camera)
   if (me.view) {
     const [sx, sy] = toScreen(me.x, me.y);
-    me.view.place(sx, sy, me.heading - cam.angle, zoomMul);
+    me.view.place(sx, sy, me.heading - cam.angle, view.k / view.baseK);
     me.view.canvas.style.display = me.gone ? 'none' : '';
     me.view.pose(me);
     me.view.canvas.classList.toggle('blink', me.spawnShield > 0 && !me.dead);
@@ -2031,7 +2075,7 @@ function frame(t) {
     r.view.canvas.style.display = r.gone ? 'none' : '';
     if (r.gone) continue;
     const [sx, sy] = toScreen(r.x, r.y);
-    r.view.place(sx, sy, r.heading - cam.angle, zoomMul);
+    r.view.place(sx, sy, r.heading - cam.angle, view.k / view.baseK);
     r.view.pose(r);
     r.view.canvas.classList.toggle('blink', r.shielded && !r.dead);
   }
@@ -2082,6 +2126,11 @@ function frame(t) {
     setShots('menu', phase === 'menu' ? 1 : 0); // (it slides away while connecting)
     setShots('menuSel', menuSel);
     setShots('menuPress', menuPress);
+    const wideOn = wideT > 0 && od.t <= 0;
+    setShots('odMeter', +(wideOn ? wideT / WIDE.hold : od.meter).toFixed(3));
+    setShots('odT', +od.t.toFixed(3));
+    setShots('odBt', +od.bt.toFixed(3));
+    setShots('odWide', wideOn ? 1 : 0);
     setShots('menuPage', menuPage);
     setShots('soundOn', SETTINGS.sound ? 1 : 0);
     setShots('sfxVol', SETTINGS.sfx);
@@ -2164,5 +2213,6 @@ if (new URLSearchParams(location.search).has('debug')) {
     fireRocket,
     die() { goDown('shot', 'test', 'TEST'); },
     get menuSel() { return menuSel; },
+    od,
   };
 }

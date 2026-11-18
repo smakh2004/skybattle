@@ -29,6 +29,7 @@ const R = window.rive;
 // of use); after a short pause it refills on its own. The gauge is in the bottom bar.
 const BOOST = { speed: 600, accel: 5, drain: 0.33, refill: 0.16, wait: 0.8 };
 const boost = { charge: 1, on: false, wait: 0 };
+let boostFx = 0; // (the boost's look, 0..1)
 const MENU_SPEED = 260; // the menu's sea and clouds rush by at this (screen px/s at the game's scale)
 const FLIGHT = {
   cruise: 153,
@@ -2186,6 +2187,9 @@ function frame(t) {
   setWorld('planeX', wx * view.unit);
   setWorld('planeY', wy * view.unit);
   setWorld('angle', cam.angle);
+  // BOOST: the clouds' motion blur, easing in and out with it
+  boostFx += ((phase === 'play' && boost.on ? 1 : 0) - boostFx) * ease(boost.on ? 5 : 3, dt);
+  setWorld('blur', boostFx < 0.01 ? 0 : +boostFx.toFixed(3));
   setWorld('planeOn', phase === 'play' && !me.dead ? 1 : 0);
   setWorld('k', view.k * view.unit);
   if (wvm) {

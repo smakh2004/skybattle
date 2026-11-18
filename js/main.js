@@ -127,7 +127,9 @@ const SEND_HZ = 12;
 // that side - faster and faster - and it is gone the moment it leaves the screen.
 // shot down: the plane flies on the way it was heading, speeding up (accel, world units/s²) as it
 // falls, and is gone once off the screen (or after life s)
-const DEATH = { accel: 520, life: 2.4 };
+const DEATH = { accel: 520, life: 2.4, crashLife: 1.4, stall: 1.3 };
+// (crashLife: s a crashed plane plays its wrecked fall where it hit before it is gone; stall: how fast
+// a plane out of oil loses its speed (1/s) - the camera flies on, so it drops away down the screen)
 // the camera looks ahead of the plane (so the plane sits low on the screen), follows it, and turns
 // with it a little late. lead: s of travel ahead; ease: follow (1/s); turn: angle catch-up (1/s);
 // zoom: how far out (1 = the game's own scale, smaller = further away)
@@ -541,13 +543,13 @@ function goDown(cause, byId, byName) {
   me.abOrder = [];
   collects.length = 0;
   introUntil = 0;
-  if (cause === 'crash') { me.speed = 0; me.turn = 0; } // (blown up where it hit: it stays there)
+  if (cause === 'crash') { me.speed = 0; me.turn = 0; } // (blown up where it hit: it falls there)
+  me.camV = me.speed; // (out of oil: the camera flies on at this speed while the plane drops away)
   net && net.kill(byId || session.id, byName || me.name, me.name, cause);
   if (cause === 'oil') sfx.play('sputter');
   if (cause === 'crash') {
-    // a collision: my plane blows up right here and is gone
+    // a collision: my plane blows up right here and plays its wrecked fall there
     crashBurst(me.x, me.y);
-    me.gone = true;
   } else {
     sfx.play('explode_big');
     setTimeout(() => sfx.play('splash'), 950); // it hits the water
@@ -563,12 +565,17 @@ function fly(p, dt, ctl) {
     // shot down: it flies on the way it was heading, speeding up as it falls (the lose timeline
     // shrinks it), and is gone once off the screen; the camera stays where it went down. (A crash:
     // it blew up where it hit and stays there.)
-    if (!(p === me && p.deathCause === 'crash')) p.speed += DEATH.accel * dt;
+    // Out of oil: the engine is dead - it loses its speed while the camera flies on, so it drops away
+    // down the screen. A crash: it falls where it hit (the wrecked timeline) and is gone after it.
+    const cause = p === me ? p.deathCause : 'shot';
+    if (cause === 'crash') p.speed = 0;
+    else if (cause === 'oil') p.speed += (0 - p.speed) * ease(DEATH.stall, dt);
+    else p.speed += DEATH.accel * dt;
     p.turn += (0 - p.turn) * ease(4, dt);
     p.deadT += dt;
     if (p === me && !p.gone) {
       const [sx, sy] = toScreen(p.x, p.y);
-      if (!onScreen(sx, sy, 160 * view.k / CAMERA.zoom) || p.deadT > DEATH.life) p.gone = true;
+      if (cause === 'crash' ? p.deadT > DEATH.crashLife : !onScreen(sx, sy, 160 * view.k / CAMERA.zoom) || p.deadT > DEATH.life) p.gone = true;
     }
     if (p.deadT > RESPAWN) {
       spawn(p);
@@ -1150,7 +1157,7 @@ function myState() {
     f: me.shots, pf: me.podShots, po: me.podAmmo > 0 ? 1 : 0,
     rk: me.rockets, rt: me.rocketTarget || '',
     sh: me.shieldHits,
-    d: me.dead, dc: me.dead && me.deathCause === 'crash' ? 1 : 0, u: me.burning, i: me.spawnShield > 0,
+    d: me.dead, dc: !me.dead ? 0 : me.deathCause === 'crash' ? 1 : me.deathCause === 'oil' ? 2 : 0, u: me.burning, i: me.spawnShield > 0,
     a: Math.round(me.hp),
     s: me.score,
   };
@@ -1168,8 +1175,8 @@ function onPlayers(all) {
     const wasDead = r.dead;
     if (!wasDead && st.d) {
       r.deadAt = performance.now();
-      if (st.dc) crashRemote(r); // a collision: it blows up where it is
-      else startFling(r); // shot down: it flies on and falls away
+      if (st.dc === 1) crashRemote(r); // a collision: it blows up and falls where it is
+      else startFling(r, st.dc === 2); // shot down: it flies on and falls away (out of oil: it stalls)
     }
     if (wasDead && !st.d) { r.fling = null; r.gone = false; }
     r.net = st;
@@ -1277,18 +1284,19 @@ function crashBurst(x, y) {
 }
 
 function crashRemote(r) {
-  if (r.gone) return;
+  if (r.gone || (r.fling && r.fling.crash)) return;
   crashBurst(r.x, r.y);
-  r.fling = null;
-  r.gone = true;
+  r.fling = { dx: 0, dy: 0, v: 0, t: 0, crash: true }; // (falls where it hit, then is gone)
+  r.gone = false;
 }
 
 // The solo game's shot-down flight (killEnemy / the dying update), in screen pixels at its scale.
-function startFling(r) {
-  // it keeps going the way it was flying, faster and faster, falling (the dead timeline shrinks it)
+function startFling(r, stall = false) {
+  // it keeps going the way it was flying, faster and faster, falling (the dead timeline shrinks it);
+  // out of oil it stalls instead - slowing to a stop as it drops
   const dx = Math.sin(r.heading), dy = -Math.cos(r.heading);
   const v = Math.max(r.speed || 0, FLIGHT.cruise);
-  r.fling = { dx, dy, v, t: 0 };
+  r.fling = { dx, dy, v, t: 0, stall };
   sfx.play('explode', near(r.x, r.y));
   r.gone = false;
 }
@@ -1297,7 +1305,9 @@ function updateFling(r, dt) {
   const f = r.fling;
   const K = view.k / CAMERA.zoom;
   f.t += dt;
-  f.v += DEATH.accel * dt;
+  if (f.crash) { if (f.t > DEATH.crashLife) r.gone = true; return; }
+  if (f.stall) f.v += (0 - f.v) * ease(DEATH.stall, dt);
+  else f.v += DEATH.accel * dt;
   r.x += f.dx * f.v * dt;
   r.y += f.dy * f.v * dt;
   const [sx, sy] = toScreen(r.x, r.y);
@@ -1480,7 +1490,15 @@ function updateTags() {
 
 // shift: where on the screen the plane sits, right of the middle (px; the menu's spectating view)
 function updateCamera(dt, p = me, shift = 0) {
-  if (p.dead) return; // (it watches the plane fall away from where it went down)
+  if (p.dead) {
+    // (it watches the plane fall away from where it went down - out of oil, it flies on without it)
+    if (p === me && p.deathCause === 'oil') {
+      const v = Math.max(p.camV || 0, FLIGHT.cruise);
+      cam.x += Math.sin(cam.angle) * v * dt;
+      cam.y -= Math.cos(cam.angle) * v * dt;
+    }
+    return;
+  }
   // (above the throttle's top speed - BOOST - the lead grows only enough to cancel the camera's
   // extra lag, so the plane keeps its place on the screen instead of sliding down under the HUD)
   const sp = p.speed || 0;

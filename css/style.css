@@ -101,6 +101,9 @@ html, body {
   overflow: hidden;
 }
 
+/* the name tags over other planes: the menu's look - a slanted dark plate with a light edge and a
+   pink marker, the name in the game's font, and the HP as a segmented glowing bar with its number
+   (like the settings' volume sliders); amber when low, red and pulsing when critical */
 .tag {
   position: absolute;
   left: 0;
@@ -109,26 +112,94 @@ html, body {
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--ink);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  font-family: "Russo One", sans-serif;
   white-space: nowrap;
+  --hp: #ff4d6a;
+}
+
+.tag .plate {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px 2px 9px;
+  isolation: isolate;
+}
+
+.tag .plate::before,
+.tag .plate::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  clip-path: polygon(8% 0, 100% 0, 92% 100%, 0 100%);
+}
+
+.tag .plate::before { inset: 0; background: rgba(230, 238, 245, 0.5); }
+.tag .plate::after { inset: 1px; background: linear-gradient(90deg, rgba(11, 18, 26, 0.9), rgba(11, 18, 26, 0.7)); }
+
+.tag .mk {
+  width: 3px;
+  height: 10px;
+  background: var(--accent);
+  transform: skewX(-14deg);
+  box-shadow: 0 0 6px rgba(255, 77, 106, 0.8);
+}
+
+.tag .nm {
+  font-size: 11px;
+  letter-spacing: 1.4px;
+  color: #f2f6f8;
+  text-shadow: 1px 1px 0 rgba(6, 12, 18, 0.8);
+}
+
+.tag .hpw {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px 2px 8px;
+  isolation: isolate;
+}
+
+.tag .hpw::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: rgba(11, 18, 26, 0.72);
+  clip-path: polygon(7% 0, 100% 0, 93% 100%, 0 100%);
 }
 
 .tag .bar {
-  width: 44px;
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(0, 0, 0, 0.45);
-  overflow: hidden;
+  position: relative;
+  width: 60px;
+  height: 6px;
+  transform: skewX(-20deg);
+  /* the unlit segments */
+  background: repeating-linear-gradient(90deg, rgba(230, 238, 245, 0.18) 0 4.2px, transparent 4.2px 5.2px);
 }
 
 .tag .bar i {
   display: block;
   height: 100%;
-  background: var(--accent);
+  /* the lit segments, glowing */
+  background: repeating-linear-gradient(90deg, var(--hp) 0 4.2px, transparent 4.2px 5.2px);
+  filter: drop-shadow(0 0 3px var(--hp));
+  transition: width 0.2s ease-out;
 }
+
+.tag .hpn {
+  min-width: 20px;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  color: var(--hp);
+  text-shadow: 0 0 6px var(--hp);
+}
+
+.tag.low { --hp: #ffb347; }
+.tag.crit { --hp: #ff3b3b; }
+.tag.crit .bar i { animation: tagPulse 0.6s ease-in-out infinite; }
+@keyframes tagPulse { 50% { opacity: 0.45; } }
 
 .tag.dead { opacity: 0.5; }
 

@@ -1192,7 +1192,9 @@ function onPlayers(all) {
 function makeRemote(id, st) {
   const tag = document.createElement('div');
   tag.className = 'tag';
-  tag.innerHTML = '<span class="nm"></span><span class="bar"><i></i></span>';
+  // (the menu's look: a slanted plate with a pink marker, the name, a segmented HP bar and its number)
+  tag.innerHTML = '<span class="plate"><b class="mk"></b><span class="nm"></span></span>' +
+    '<span class="hpw"><span class="bar"><i></i></span><span class="hpn">100</span></span>';
   tagsLayer.appendChild(tag);
   const arrow = document.createElement('div');
   arrow.className = 'arrow-off';
@@ -1414,8 +1416,16 @@ function updateTags() {
       r.tag.style.display = '';
       r.arrow.style.display = 'none';
       r.tag.style.transform = `translate(${x}px, ${y - 46 * view.k}px) translate(-50%, -100%)`;
-      if (r.nameShown !== r.name) { r.tag.querySelector('.nm').textContent = r.name; r.nameShown = r.name; }
-      r.tag.querySelector('.bar i').style.width = `${r.hpShown}%`;
+      const tg = r.tagEls || (r.tagEls = { nm: r.tag.querySelector('.nm'), bar: r.tag.querySelector('.bar i'), hpn: r.tag.querySelector('.hpn') });
+      if (r.nameShown !== r.name) { tg.nm.textContent = r.name; r.nameShown = r.name; }
+      const hp = Math.max(0, Math.round(r.hpShown));
+      if (r.hpTag !== hp) {
+        r.hpTag = hp;
+        tg.bar.style.width = `${hp}%`;
+        tg.hpn.textContent = hp;
+        r.tag.classList.toggle('low', hp <= 50 && hp > 25);
+        r.tag.classList.toggle('crit', hp <= 25);
+      }
       r.tag.classList.toggle('dead', r.dead);
     } else {
       r.tag.style.display = 'none';

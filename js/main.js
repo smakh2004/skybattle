@@ -19,6 +19,8 @@
 // an update reaches players at once instead of after the browser's cache runs out
 const V = new URL(import.meta.url).searchParams.get('v') || '0';
 const { createNet } = await import(`./net.js?v=${V}`);
+const { createSound } = await import(`./sound.js?v=${V}`);
+const sfx = createSound(V); // the solo game's sounds and music
 
 const R = window.rive;
 
@@ -95,7 +97,6 @@ const shotsCanvas = $('#shots');
 const planesLayer = $('#planes');
 const tagsLayer = $('#tags');
 const nameInput = $('#nameInput');
-const joinBtn = $('#joinBtn');
 const menuStatus = $('#menuStatus');
 const banner = $('#banner');
 const feed = $('#feed');
@@ -319,6 +320,7 @@ addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'Escape') leaveGame();
   if (e.code === 'KeyQ') fireRocket();
+  if (e.code === 'KeyM') sfx.toggleMute();
   if (e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -406,6 +408,8 @@ function dirToScreen(dx, dy) {
 // world -> the world shader's frame: around the screen centre, not turned (it turns it itself)
 const toWorldFrame = (x, y) => [view.sw / 2 + (x - cam.x) * view.k, view.sh / 2 + (y - cam.y) * view.k];
 const onScreen = (sx, sy, m) => sx > -m && sy > -m && sx < view.sw + m && sy < view.sh + m;
+// how loud something at (x, y) sounds: full near the camera, silent a screen and a half away
+const near = (x, y) => clamp(1 - Math.hypot(x - cam.x, y - cam.y) / ((Math.hypot(view.sw, view.sh) * 0.75) / view.k), 0, 1);
 
 let bannerT = 0;
 function showBanner(html, secs = 2.2) {
@@ -458,6 +462,9 @@ function goDown(cause, byId, byName) {
   me.deadT = 0;
   me.hp = 0;
   net && net.kill(byId || session.id, byName || me.name, me.name, cause);
+  if (cause === 'oil') sfx.play('sputter');
+  sfx.play('explode_big');
+  setTimeout(() => sfx.play('splash'), 950); // it hits the water
   if (cause === 'oil') showBanner('OUT OF OIL<small>THE ENGINE STOPPED</small>', RESPAWN);
   else if (cause === 'crash') showBanner(`COLLISION<small>WITH ${esc(byName)}</small>`, RESPAWN);
   else showBanner(`SHOT DOWN<small>BY ${esc(byName)}</small>`, RESPAWN);
@@ -481,7 +488,9 @@ function fly(p, dt, ctl) {
     p.speed += (target - p.speed) * ease(FLIGHT.accel, dt);
     p.turn += (ctl.x - p.turn) * ease(FLIGHT.turnEase, dt);
     // oil drains while flying; when it runs out the engine stops (game.luau OIL)
+    const oilWas = p.oil;
     p.oil = Math.max(0, p.oil - OIL.drain * dt);
+    if (oilWas > 25 && p.oil <= 25) sfx.play('warning');
     if (p.oil <= 0) goDown('oil');
   }
   p.heading = wrap(p.heading + p.turn * FLIGHT.turn * dt);
@@ -508,7 +517,7 @@ function guns(p, dt, wantFire) {
     const q = p.pending[i];
     q.t -= dt;
     if (q.t <= 0) {
-      if (!p.dead) { shoot(p, q.gun, true); p.shots += 1; }
+      if (!p.dead) { shoot(p, q.gun, true); p.shots += 1; sfx.play('gun'); }
       p.pending.splice(i, 1);
     }
   }
@@ -517,6 +526,7 @@ function guns(p, dt, wantFire) {
   const first = p.shots % 2; // alternate, so the others can tell which gun fired
   shoot(p, first, true);
   p.shots += 1;
+  sfx.play('gun');
   p.pending.push({ t: interval * rand(0.35, 0.65), gun: 1 - first });
   p.view && p.view.fire('fire');
   p.gunT = interval;
@@ -526,6 +536,7 @@ function guns(p, dt, wantFire) {
 function firePods(p) {
   if (p.podAmmo <= 0 || p.podT < 0.6) return;
   podVolley(p, true);
+  sfx.play('pod');
   p.podAmmo = Math.max(0, p.podAmmo - 2);
   p.podShots += 1;
   if (p.podAmmo <= 0) dropAbility('guns');
@@ -578,6 +589,7 @@ function claimSlot(k) {
 function takePickup(pk) {
   collects.push({ id: pk.id, kind: pk.kind, x: pk.x, y: pk.y, t: 0, bt: pk.t });
   const k = pk.kind;
+  sfx.play(k === KIND.shield ? 'shield_up' : k === KIND.repair ? 'repair' : k === KIND.oil ? 'oil' : 'pickup');
   if (k === KIND.repair) { me.hp = Math.min(MAX_HP, me.hp + REPAIR_HP); return; }
   if (k === KIND.oil) { me.oil = Math.min(OIL.max, me.oil + OIL.refill); return; }
   const name = k === KIND.rockets ? 'rockets' : k === KIND.shield ? 'shield' : 'guns';
@@ -654,6 +666,7 @@ function fireRocket() {
   }
   if (!best) { showBanner('NO TARGET IN RANGE', 0.8); return; }
   launch(me, best.id, true);
+  sfx.play('rocket');
   me.rockets += 1;
   me.rocketTarget = best.id;
   me.rktCd = ROCKET.cooldown;
@@ -721,6 +734,7 @@ function updateMissiles(dt) {
 
 function explode(m, hitP) {
   m.dead = true;
+  sfx.play('blast', near(m.x, m.y));
   rings.push({ x: m.x, y: m.y, t: 0, max: 0.35, r: ROCKET.splashR * 1.3 });
   for (let i = 0; i < 6; i++) sparks.push({ x: m.x + rand(-14, 14), y: m.y + rand(-14, 14), t: rand(0, 0.08) });
   for (let i = 0; i < 8; i++) {
@@ -766,6 +780,7 @@ function updateBullets(dt) {
         sparks.push({ x: at[0], y: at[1], t: 0 });
         if (p.shielded || p.spawnShield > 0) break;
         if (b.mine && p !== me) {
+          sfx.play('hit_enemy');
           net && net.hit(p.id, b.dmg);
           if (!p.shieldHits) {
             me.score += SCORE.hit;
@@ -1007,6 +1022,7 @@ function onPlayers(all) {
     for (let i = 0; i < fired; i++) {
       const n = r.shots + i;
       shoot(r, n % 2, false);
+      sfx.play('gun', 0.7 * near(r.x, r.y));
       if (n % 2 === 0) r.view && r.view.fire('fire');
     }
     r.shots = Math.max(r.shots, st.f || 0);
@@ -1014,7 +1030,7 @@ function onPlayers(all) {
     for (let i = 0; i < pods; i++) podVolley(r, false);
     r.podShots = Math.max(r.podShots, st.pf || 0);
     const rk = Math.min(3, (st.rk || 0) - r.rockets);
-    for (let i = 0; i < rk; i++) launch(r, st.rt, false);
+    for (let i = 0; i < rk; i++) { launch(r, st.rt, false); sfx.play('rocket', near(r.x, r.y)); }
     r.rockets = Math.max(r.rockets, st.rk || 0);
   }
   for (const [id, r] of remotes) {
@@ -1086,6 +1102,7 @@ function startFling(r) {
     vy = 0;
   }
   r.fling = { side, vx, vy, down: vy > 0, x: r.x, y: r.y, ox: 0, oy: 0, t: 0 };
+  sfx.play('explode', near(r.x, r.y));
   r.gone = false;
 }
 
@@ -1171,10 +1188,12 @@ function onHit({ by, dmg, crash }) {
   if (me.shieldHits > 0) {
     me.shieldHits -= 1;
     me.shieldFlash = 1;
+    sfx.play('shield_hit');
     if (me.shieldHits <= 0) dropAbility('shield');
     return;
   }
   me.hp = Math.max(0, me.hp - (+dmg || 0));
+  sfx.play('hit_player');
   me.view && me.view.fire('hit');
   if (me.hp <= 0) goDown('shot', by, killer ? killer.name : 'PILOT');
 }
@@ -1224,7 +1243,7 @@ function updateBoard(dt) {
   if (mine.rank > BOARD_ROWS) shown.push(mine);
   boardRect = board.getBoundingClientRect();
   const html = shown.map((r) =>
-    `<li class="${r.rank === 1 ? 'first' : ''} ${r.me ? 'me' : ''}"><span class="rank">${r.rank === 1 ? '★' : r.rank}</span>` +
+    `<li class="${r.rank === 1 ? 'first' : ''} ${r.me ? 'me' : ''}"><span class="rank">${String(r.rank).padStart(2, '0')}</span><span class="div"></span>` +
     `<span class="name">${esc(r.name)}${r.me ? ' (YOU)' : ''}</span><span class="pts">${r.score}</span></li>`).join('');
   // (only when it changed: the curved table is redrawn from it)
   if (html !== lastBoard) { $('#boardList').innerHTML = html; lastBoard = html; }
@@ -1311,23 +1330,93 @@ function measure() {
 }
 addEventListener('resize', measure);
 
-// --- menu -------------------------------------------------------------------------------------
+// --- menu: the solo game's MainMenu (drawn by the overlay, bent like the game's) ---------------
+// 01 the player's name, 02 PLAY, 03 CONTROLS (the controls list). W / S or the arrows select, ENTER
+// confirms, as in the game; typing on the name button writes the name; the mouse and taps work too.
 let menuPlane = null;
-let menuSel = 1; // the selected row: 0 name, 1 join
+let menuSel = 1;
+let menuList = false;
+let menuPress = 0;
 let menuT = 0;
 let menuFireT = 1;
-const rowsEl = [...document.querySelectorAll('.row')];
-const chevron = document.createElement('div');
-chevron.className = 'chevron';
-chevron.textContent = '›';
-$('.rows').appendChild(chevron);
+const menuEl = $('#menu');
 
-function selectRow(i) {
-  menuSel = (i + rowsEl.length) % rowsEl.length;
-  rowsEl.forEach((r, n) => r.classList.toggle('sel', n === menuSel));
-  chevron.style.transform = `translateY(${rowsEl[menuSel].offsetTop}px)`;
-  if (menuSel === 0) nameInput.focus();
+function setSel(i, sound = true) {
+  i = ((i - 1 + 3) % 3) + 1;
+  if (i !== menuSel && sound) sfx.play('ui_move');
+  menuSel = i;
+  if (menuSel === 1) focusName();
   else if (document.activeElement === nameInput) nameInput.blur();
+}
+
+// the buttons on screen, as the overlay drew them (css px)
+function menuRows() {
+  const p = svm && svm.string('menuHit');
+  if (!p || !p.value) return [];
+  return p.value.split(';').filter(Boolean).map((r) => r.split(' ').map((v) => +v / view.unit));
+}
+
+// the real text field sits, invisible, over the name button (phones open their keyboard for it)
+function focusName() {
+  const r = menuRows()[0];
+  if (r) {
+    Object.assign(nameInput.style, { left: r[0] + 'px', top: r[1] + 'px', width: r[2] - r[0] + 'px', height: r[3] - r[1] + 'px' });
+  }
+  if (phase === 'menu' && document.activeElement !== nameInput) nameInput.focus({ preventScroll: true });
+}
+
+function pressRow(i) {
+  if (phase !== 'menu') return;
+  menuPress += 1;
+  if (i === 1) { sfx.play('ui_press'); focusName(); }
+  else if (i === 2) joinGame();
+  else { menuList = !menuList; sfx.play('ui_press'); }
+}
+
+function rowAt(x, y) {
+  const rows = menuRows();
+  for (let i = 0; i < rows.length; i++) {
+    const [x0, y0, x1, y1] = rows[i];
+    if (x >= x0 && x <= x1 && y >= y0 && y <= y1) return i + 1;
+  }
+  return 0;
+}
+
+menuEl.addEventListener('pointermove', (e) => {
+  const i = rowAt(e.clientX, e.clientY);
+  if (i && i !== menuSel) setSel(i);
+});
+menuEl.addEventListener('pointerdown', (e) => {
+  const i = rowAt(e.clientX, e.clientY);
+  if (!i) return;
+  e.preventDefault();
+  if (i !== menuSel) setSel(i);
+  pressRow(i);
+});
+nameInput.addEventListener('input', () => {
+  const v = nameInput.value.toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '').slice(0, 16);
+  if (v !== nameInput.value) nameInput.value = v;
+  setStatus('');
+});
+nameInput.addEventListener('focus', () => { if (menuSel !== 1) setSel(1); });
+
+addEventListener('keydown', (e) => {
+  if (phase !== 'menu') return;
+  const typing = menuSel === 1;
+  if (e.code === 'Enter') {
+    e.preventDefault();
+    if (menuSel === 1) setSel(2); // the name is in: on to PLAY
+    else pressRow(menuSel);
+    return;
+  }
+  if (e.code === 'ArrowDown' || (!typing && e.code === 'KeyS')) { e.preventDefault(); setSel(menuSel + 1); }
+  else if (e.code === 'ArrowUp' || (!typing && e.code === 'KeyW')) { e.preventDefault(); setSel(menuSel - 1); }
+  else if (e.code === 'KeyM' && !typing) sfx.toggleMute();
+});
+
+function setStatus(text, err = false) {
+  menuStatus.textContent = text;
+  menuStatus.classList.toggle('err', err);
 }
 
 // Curved panels, like the solo game's (GFX.menuBend, drawPanel): each column stretched up and down
@@ -1461,37 +1550,11 @@ class Bent {
   }
 }
 
-// the menu: its left end the tallest (MENU.curve 0.34); the score table: its outer (right) end, like
-// a panel beside the plane (PANEL_CURVE 0.3). Phones keep them flat (the menu is stacked there).
+// the score table: its outer (right) end the tallest, like a panel beside the plane (PANEL_CURVE 0.3)
 const board = $('.board');
-const bentMenu = new Bent($('.menu-panel'), 0.34, true);
 const bentBoard = new Bent(board, 0.3, false);
 function bendMenu() {
-  const flat = matchMedia('(max-width: 760px)').matches;
-  bentMenu.enable(!flat);
-  bentBoard.enable(!flat);
-}
-
-rowsEl.forEach((r, i) => r.addEventListener('pointerenter', () => { if (phase === 'menu') selectRow(i); }));
-nameInput.addEventListener('focus', () => selectRow(0));
-nameInput.addEventListener('input', () => {
-  const v = nameInput.value.toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '');
-  if (v !== nameInput.value) nameInput.value = v;
-  setStatus('');
-});
-joinBtn.addEventListener('click', () => joinGame());
-
-addEventListener('keydown', (e) => {
-  if (phase !== 'menu') return;
-  const typing = document.activeElement === nameInput;
-  if (e.code === 'Enter') { e.preventDefault(); joinGame(); return; }
-  if (e.code === 'ArrowDown' || (!typing && e.code === 'KeyS')) { e.preventDefault(); selectRow(menuSel + 1); }
-  else if (e.code === 'ArrowUp' || (!typing && e.code === 'KeyW')) { e.preventDefault(); selectRow(menuSel - 1); }
-});
-
-function setStatus(text, err = false) {
-  menuStatus.textContent = text;
-  menuStatus.classList.toggle('err', err);
+  bentBoard.enable(!matchMedia('(max-width: 760px)').matches);
 }
 
 async function joinGame() {
@@ -1499,12 +1562,13 @@ async function joinGame() {
   const name = cleanName(nameInput.value);
   if (name.length < 2) {
     setStatus('TYPE YOUR NAME (2-16 LETTERS)', true);
-    selectRow(0);
+    setSel(1);
     return;
   }
+  menuPress += 1;
+  sfx.play('ui_start');
   try { localStorage.setItem('skyblitz.name', name); } catch {}
   phase = 'joining';
-  joinBtn.disabled = true;
   setStatus('JOINING…');
   try {
     net = net || await createNet();
@@ -1517,11 +1581,10 @@ async function joinGame() {
     console.error('join failed', e);
     setStatus('COULD NOT JOIN: ' + (e && e.message ? e.message : e), true);
     phase = 'menu';
-    joinBtn.disabled = false;
     return;
   }
-  joinBtn.disabled = false;
   setStatus('');
+  if (document.activeElement === nameInput) nameInput.blur();
   me.score = 0;
   me.shots = me.podShots = me.rockets = 0;
   me.gunT = 0;
@@ -1556,7 +1619,8 @@ async function leaveGame() {
   collects.length = 0;
   feed.innerHTML = '';
   banner.classList.remove('show');
-  selectRow(1);
+  menuList = false;
+  setSel(2, false);
 }
 
 // --- quality monitor ---------------------------------------------------------------------------
@@ -1684,6 +1748,16 @@ function frame(t) {
     setShots('introKind', introKind);
     setShots('introSeq', introSeq);
     setShots('ax', +(me.bank * 0.7).toFixed(2));
+    setShots('menu', phase === 'play' ? 0 : 1);
+    setShots('menuSel', menuSel);
+    setShots('menuList', menuList ? 1 : 0);
+    setShots('menuPress', menuPress);
+    setShots('mobile', matchMedia('(pointer: coarse)').matches ? 1 : 0);
+    const typed = cleanName(nameInput.value);
+    const caret = menuSel === 1 && phase !== 'play' && Math.floor(t / 530) % 2 === 0 ? '|' : '';
+    const nameText = (typed || (caret ? '' : 'YOUR NAME')) + caret;
+    const np = svm.string('nameText');
+    if (np && np.value !== nameText) np.value = nameText;
     setShots('ay', +(-me.pitch * 0.5).toFixed(2));
   }
   requestAnimationFrame(frame);
@@ -1694,7 +1768,7 @@ async function boot() {
   try {
     nameInput.value = cleanName(localStorage.getItem('skyblitz.name') || '');
   } catch {}
-  selectRow(nameInput.value ? 1 : 0);
+  menuSel = nameInput.value ? 2 : 1;
   try {
     const [w, s, mine, showcase] = await Promise.all([
       loadRive({
@@ -1723,7 +1797,8 @@ async function boot() {
     if (!wvm || !svm) console.warn('world.riv: view model not bound');
     setWorld('quality', Q().detail);
     measure();
-    selectRow(menuSel);
+    if (menuSel === 1) setTimeout(focusName, 300);
+    sfx.music(true);
     $('#loading').classList.add('done');
     requestAnimationFrame(frame);
     createNet().then((n) => {
@@ -1746,5 +1821,6 @@ if (new URLSearchParams(location.search).has('debug')) {
     give(kind) { takePickup({ id: pickupId++, kind: KIND[kind], x: me.x, y: me.y, t: 0 }); },
     fireRocket,
     die() { goDown('shot', 'test', 'TEST'); },
+    get menuSel() { return menuSel; },
   };
 }

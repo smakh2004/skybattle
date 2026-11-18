@@ -8,7 +8,7 @@
   <link rel="icon" href="data:," />
   <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
        browsers load the new files at once instead of a cached copy -->
-  <link rel="stylesheet" href="css/style.css?v=11" />
+  <link rel="stylesheet" href="css/style.css?v=12" />
   <script>
     // Static hosting cannot send the cross-origin isolation headers Rive needs for its threads;
     // coi-sw.js adds them. The first visit installs it and reloads once (never in a loop).
@@ -44,14 +44,15 @@
     <!-- the scoreboard, top right (the HUD bar along the bottom is drawn by Rive) -->
     <header id="hud">
       <aside class="board" aria-label="Leaderboard">
-        <div class="board-head"><span>PILOTS</span><span id="boardCount">1 ONLINE</span></div>
+        <div class="board-head"><span class="board-kicker">PILOTS</span><span id="boardCount">1 ONLINE</span></div>
+        <div class="board-rule"></div>
         <ol id="boardList"></ol>
       </aside>
     </header>
     <div id="feed" aria-live="polite"></div>
     <div id="banner" aria-live="assertive"></div>
     <div id="help">
-      <b>A / D</b> turn &nbsp;·&nbsp; <b>W / S</b> throttle &nbsp;·&nbsp; <b>Space</b> fire &nbsp;·&nbsp; <b>Q</b> rocket &nbsp;·&nbsp; <b>Esc</b> menu
+      <b>A / D</b> turn &nbsp;·&nbsp; <b>W / S</b> throttle &nbsp;·&nbsp; <b>Space</b> fire &nbsp;·&nbsp; <b>Q</b> rocket &nbsp;·&nbsp; <b>M</b> sound &nbsp;·&nbsp; <b>Esc</b> menu
     </div>
 
     <!-- touch controls -->
@@ -60,47 +61,20 @@
     <button id="rocketBtn" aria-label="Fire a rocket">ROCKET</button>
     <button id="exitBtn" aria-label="Back to menu">✕</button>
 
-    <!-- main menu (the solo game's SKY BLITZ menu, curved like it) -->
+    <!-- the main menu: the solo game's MainMenu, drawn by Rive (world.riv "Shots", overlay.luau);
+         here only the name field (invisible, over its button) and the plane on show -->
     <section id="menu" aria-label="Main menu">
-      <div class="menu-shade"></div>
-      <div class="menu-panel">
-        <div class="title-group">
-          <div class="kicker">SKY</div>
-          <h1 class="title">BLITZ</h1>
-          <div class="title-rule"></div>
-          <div class="tagline">ONLINE AIR COMBAT</div>
-        </div>
-
-        <div class="rows">
-          <label class="row" data-row="0">
-            <span class="idx">01</span><span class="div"></span>
-            <input id="nameInput" type="text" maxlength="16" placeholder="YOUR NAME" autocomplete="off" spellcheck="false" />
-          </label>
-          <button class="row" data-row="1" id="joinBtn">
-            <span class="idx">02</span><span class="div"></span>
-            <span class="row-text">JOIN BATTLE</span>
-          </button>
-        </div>
-
-        <div class="status" id="menuStatus"></div>
-
-        <div class="footer">
-          <div class="footer-rule"></div>
-          <span class="keychip">W / S</span><span class="hint">SELECT</span>
-          <span class="keychip">ENTER</span><span class="hint">JOIN</span>
-        </div>
-      </div>
-
+      <input id="nameInput" type="text" maxlength="16" aria-label="Your name" autocomplete="off" spellcheck="false" />
+      <div class="status" id="menuStatus"></div>
       <div class="showcase">
         <canvas id="menuPlane"></canvas>
       </div>
     </section>
 
-
     <div id="loading">Loading…</div>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js?v=11"></script>
+  <script type="module" src="js/main.js?v=12"></script>
 </body>
 </html>

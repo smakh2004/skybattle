@@ -389,8 +389,9 @@ html, body {
   background: var(--glass);
   color: var(--ink-dim);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 13px;
+  font-size: 12px;
   text-align: center;
+  white-space: nowrap; /* (one line) */
   pointer-events: none;
 }
 

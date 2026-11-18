@@ -25,6 +25,10 @@ const sfx = createSound(V); // the solo game's sounds and music
 const R = window.rive;
 
 // --- tuning (the solo game's numbers, in world units: its px/s at k = 1.5, / 1.5) ---------------
+// E (held): BOOST - the plane flies much faster while the charge lasts (empty in BOOST.drain^-1 s
+// of use); after a short pause it refills on its own. The gauge is in the bottom bar.
+const BOOST = { speed: 420, accel: 4, drain: 0.33, refill: 0.16, wait: 0.8 };
+const boost = { charge: 1, on: false, wait: 0 };
 const MENU_SPEED = 260; // the menu's sea and clouds rush by at this (screen px/s at the game's scale)
 const FLIGHT = {
   cruise: 153,
@@ -434,6 +438,7 @@ function readInput() {
   if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
   if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
   let fire = keys.has('Space') || touch.fire;
+  input.boost = keys.has('KeyE');
   if (touch.stickId !== null) { x = touch.x; y = touch.y; }
   const pads = padsOn && navigator.getGamepads ? navigator.getGamepads() : [];
   for (const p of pads) {
@@ -514,6 +519,7 @@ function spawn(p) {
   p.rktAmmo = 0;
   p.shieldHits = 0; p.shieldT = 0; p.shieldFlash = 0;
   p.abOrder = [];
+  if (p === me) { boost.charge = 1; boost.on = false; boost.wait = 0; }
   pickups.length = 0;
   pickupT = PICKUP.first;
 }
@@ -569,9 +575,20 @@ function fly(p, dt, ctl) {
       showBanner('BACK IN THE AIR', 'FIGHT');
     }
   } else {
-    const target = ctl.y < 0 ? FLIGHT.cruise + (FLIGHT.boost - FLIGHT.cruise) * -ctl.y
+    let target = ctl.y < 0 ? FLIGHT.cruise + (FLIGHT.boost - FLIGHT.cruise) * -ctl.y
       : FLIGHT.cruise - (FLIGHT.cruise - FLIGHT.brake) * ctl.y;
-    p.speed += (target - p.speed) * ease(FLIGHT.accel, dt);
+    // BOOST (E held, while there is charge)
+    if (p === me) {
+      boost.on = ctl.boost && boost.charge > 0;
+      if (boost.on) {
+        boost.charge = Math.max(0, boost.charge - BOOST.drain * dt);
+        boost.wait = BOOST.wait;
+        target = BOOST.speed;
+      } else if ((boost.wait -= dt) <= 0) {
+        boost.charge = Math.min(1, boost.charge + BOOST.refill * dt);
+      }
+    }
+    p.speed += (target - p.speed) * ease(p === me && boost.on ? BOOST.accel : FLIGHT.accel, dt);
     p.turn += (ctl.x - p.turn) * ease(FLIGHT.turnEase, dt);
     // oil drains while flying; when it runs out the engine stops (game.luau OIL)
     const oilWas = p.oil;
@@ -1463,7 +1480,10 @@ function updateTags() {
 // shift: where on the screen the plane sits, right of the middle (px; the menu's spectating view)
 function updateCamera(dt, p = me, shift = 0) {
   if (p.dead) return; // (it watches the plane fall away from where it went down)
-  const v = (p.speed || 0) * CAMERA.lead;
+  // (above the throttle's top speed - BOOST - the lead grows only enough to cancel the camera's
+  // extra lag, so the plane keeps its place on the screen instead of sliding down under the HUD)
+  const sp = p.speed || 0;
+  const v = Math.min(sp, FLIGHT.boost) * CAMERA.lead + Math.max(0, sp - FLIGHT.boost) / CAMERA.ease;
   const c = Math.cos(cam.angle), sn = Math.sin(cam.angle);
   const tx = p.x + Math.sin(p.heading) * v - (c * shift) / view.k;
   const ty = p.y - Math.cos(p.heading) * v - (sn * shift) / view.k;
@@ -2200,6 +2220,8 @@ function frame(t) {
     setShots('odT', +od.t.toFixed(3));
     setShots('odBt', +od.bt.toFixed(3));
     setShots('odWide', wideOn ? 1 : 0);
+    setShots('boost', +boost.charge.toFixed(3));
+    setShots('boostOn', boost.on ? 1 : 0);
     setShots('menuPage', menuPage);
     setShots('soundOn', SETTINGS.sound ? 1 : 0);
     setShots('sfxVol', SETTINGS.sfx);

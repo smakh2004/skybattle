@@ -48,6 +48,7 @@ const PLANES = {
 };
 const STAT_MAX = { hp: 150, speed: 1.08, fire: 85 }; // for the menu's meters
 
+const PLANE_ARTBOARD = 320; // planes.riv's artboard size (units)
 const BULLET_LIFE = 1.4; // s
 // the arena's radius in world units (past it the plane is turned back toward the battle); it grows
 // with the number of players so a crowd still has room
@@ -110,8 +111,10 @@ async function planesSource() {
 
 /** One plane on screen: its own canvas and planes.riv instance. */
 class PlaneView {
-  constructor(canvas) {
+  // crop: show only the middle of the artboard (the menu's big plane: no smoke there)
+  constructor(canvas, crop = false) {
     this.canvas = canvas;
+    this.crop = crop;
     this.size = 150;
     this.r = null;
     this.vm = null;
@@ -123,7 +126,9 @@ class PlaneView {
       canvas: this.canvas,
       artboard: 'Plane',
       useOffscreenRenderer: true, // many planes share one GL context
-      layout: new R.Layout({ fit: R.Fit.Contain, alignment: R.Alignment.Center }),
+      layout: this.crop
+        ? new R.Layout({ fit: R.Fit.Contain, alignment: R.Alignment.Center, minX: 80, minY: 80, maxX: 240, maxY: 240 })
+        : new R.Layout({ fit: R.Fit.Contain, alignment: R.Alignment.Center }),
     });
     this.vm = this.r.viewModelInstance;
     if (!this.vm) console.warn('planes.riv: no view model bound');
@@ -150,9 +155,10 @@ class PlaneView {
     const h = this.size / 2;
     this.canvas.style.transform = `translate(${x - h}px, ${y - h}px) rotate(${heading}rad)`;
   }
-  /** The game draws planes at k x their artboard: the 160 artboard is 160k css px. */
+  /** The game draws planes at k x their artboard. The artboard is 320 units: the plane in the
+   * middle with room around it for its smoke trail and explosion, so they are never cut off. */
   resize(k) {
-    this.setSize(Math.round(160 * k));
+    this.setSize(Math.round(PLANE_ARTBOARD * k));
   }
   setSize(px) {
     this.size = px;
@@ -462,6 +468,57 @@ function updateBullets(dt) {
   }
 }
 
+// Two planes touching: both go down. Each player checks their own plane against the others (as
+// drawn on their screen) and goes down at once; the other is told too, in case their screen had
+// the two a little apart. Nobody scores for a collision.
+function checkCollisions() {
+  if (phase !== 'play' || me.dead || me.shield > 0) return;
+  for (const r of remotes.values()) {
+    if (!r.seen || r.dead || r.shielded) continue;
+    if (!planesTouch(me, r)) continue;
+    crashInto(r.id, r.name);
+    net && net.hit(r.id, 0, true);
+    r.view && r.view.fire('hit');
+    break;
+  }
+}
+
+// The two outlines overlap: test points around each plane's outline against the other's.
+function planesTouch(a, b) {
+  if (Math.hypot(a.x - b.x, a.y - b.y) > 110) return false;
+  return outlineInside(a, b) || outlineInside(b, a);
+}
+
+function outlineInside(a, b) {
+  const [hw, hl] = PLANES[a.plane].hit;
+  const c = Math.cos(a.heading), s = Math.sin(a.heading);
+  const [bw, bl] = PLANES[b.plane].hit;
+  const bc = Math.cos(b.heading), bs = Math.sin(b.heading);
+  for (let i = 0; i < 12; i++) {
+    const t = (i / 12) * Math.PI * 2;
+    // a point on a's outline (slightly inside, so grazing wingtips do not count)
+    const lx = Math.cos(t) * hw * 0.85, ly = Math.sin(t) * hl * 0.85;
+    const x = a.x + lx * c - ly * s, y = a.y + lx * s + ly * c;
+    const dx = x - b.x, dy = y - b.y;
+    const bx = dx * bc + dy * bs, by = -dx * bs + dy * bc;
+    if ((bx * bx) / (bw * bw) + (by * by) / (bl * bl) <= 0.85 * 0.85) return true;
+  }
+  return false;
+}
+
+// My plane goes down in a collision with player `id`.
+function crashInto(id, name) {
+  if (me.dead) return;
+  me.hp = 0;
+  me.dead = true;
+  me.burning = true;
+  me.deadT = 0;
+  me.view && me.view.fire('hit');
+  net && net.kill(id, name, me.name, true);
+  showBanner(`COLLISION<small>WITH ${esc(name)}</small>`, RESPAWN);
+  net && net.send(myState());
+}
+
 // the planes a bullet can touch: everyone alive except whoever fired it
 function* planesForHits(owner) {
   if (owner !== me.id && !me.dead && phase === 'play') yield me;
@@ -625,8 +682,13 @@ function updateRemotes(dt) {
   }
 }
 
-function onHit({ by, dmg }) {
+function onHit({ by, dmg, crash }) {
   if (phase !== 'play' || me.dead || me.shield > 0) return;
+  if (crash) {
+    const r = remotes.get(by);
+    crashInto(by, r ? r.name : 'PILOT');
+    return;
+  }
   me.hp = Math.max(0, me.hp - (+dmg || 0));
   me.lastBy = by;
   me.view && me.view.fire('hit');
@@ -642,8 +704,17 @@ function onHit({ by, dmg }) {
   }
 }
 
+const crashSeen = new Map(); // pair -> time, so a collision is announced once
 function onKill(k) {
   if (!session) return;
+  if (k.crash) {
+    const pair = [k.by, k.to].sort().join('|');
+    const now = performance.now();
+    if (now - (crashSeen.get(pair) || -1e9) < 4000) return;
+    crashSeen.set(pair, now);
+    addFeed(`<b>${esc(cleanName(k.toName))}</b> and <b>${esc(cleanName(k.byName))}</b> collided`);
+    return;
+  }
   if (k.by === session.id) {
     me.score += SCORE.kill;
     showBanner(`+${SCORE.kill}<small>YOU SHOT DOWN ${esc(cleanName(k.toName))}</small>`, 1.8);
@@ -886,6 +957,7 @@ function frame(t) {
     fly(me, dt, input);
     updateRemotes(dt);
     cullViews();
+    checkCollisions();
     updateBullets(dt);
     updateCamera(dt);
     sendT -= dt;

@@ -506,10 +506,14 @@ html, body {
   height: 100%;
 }
 
+/* the artboard is twice the plane (room for smoke), so the canvas is twice the plane's size and
+   overhangs its cell by half on every side */
 #menuPlane {
-  width: min(74vh, 48vw);
-  height: min(74vh, 48vw);
-  margin: -6vh 0 -8vh;
+  --mp: min(74vh, 48vw);
+  width: calc(var(--mp) * 2);
+  height: calc(var(--mp) * 2);
+  margin: calc(var(--mp) * -0.5 - 6vh) calc(var(--mp) * -0.5) calc(var(--mp) * -0.5 - 8vh);
+  pointer-events: none;
   animation: hover 4s ease-in-out infinite;
 }
 
@@ -548,7 +552,7 @@ html, body {
     padding-top: 12px;
   }
   .showcase { order: -1; height: auto; gap: 8px; }
-  #menuPlane { width: 30vh; height: 30vh; }
+  #menuPlane { --mp: 30vh; margin: calc(var(--mp) * -0.5) calc(var(--mp) * -0.5); }
   .menu-panel { transform: none; gap: 16px; }
   .title-group .kicker { font-size: 16px; }
   .title { font-size: 46px; }

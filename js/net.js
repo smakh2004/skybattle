@@ -7,10 +7,10 @@
 //   await net.join({ name, plane })   -> { id, label }
 //   net.send(state)                   publish my state (call ~12 times a second)
 //   net.onPlayers = (map) => {}       everyone else in the arena: { id: state }, on every change
-//   net.hit(targetId, dmg)            my bullet hit targetId
-//   net.onHit = ({ by, dmg }) => {}   a hit on me
-//   net.kill(byId, byName, myName)    I was shot down by byId
-//   net.onKill = ({ by, to, byName, toName }) => {}   anyone shot down
+//   net.hit(targetId, dmg, crash)     my bullet hit targetId (crash: our planes collided)
+//   net.onHit = ({ by, dmg, crash }) => {}   a hit on me
+//   net.kill(byId, byName, myName, crash)    I was shot down by byId (or collided with them)
+//   net.onKill = ({ by, to, byName, toName, crash }) => {}   anyone shot down
 //   net.leave()
 //
 // Player state (short keys, sent often):
@@ -23,7 +23,9 @@ const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const ARENA = 'arena'; // the database path everyone shares
 
 export async function createNet() {
-  if (firebaseConfig) return new FirebaseNet(firebaseConfig);
+  // ?local keeps a page offline (the tabs of this browser only), e.g. for testing next to a live game
+  const local = typeof location !== 'undefined' && new URLSearchParams(location.search).has('local');
+  if (firebaseConfig && !local) return new FirebaseNet(firebaseConfig);
   return new LocalNet();
 }
 
@@ -85,16 +87,16 @@ class FirebaseNet {
     if (this.meRef) this.db.set(this.meRef, { ...state, t: Date.now() });
   }
 
-  hit(to, dmg) {
+  hit(to, dmg, crash = false) {
     if (!this.meRef) return;
     const { push, ref } = this.db;
-    push(ref(this.database, `${ARENA}/inbox/${to}`), { by: this.uid, dmg, t: Date.now() });
+    push(ref(this.database, `${ARENA}/inbox/${to}`), { by: this.uid, dmg, crash, t: Date.now() });
   }
 
-  kill(by, byName, toName) {
+  kill(by, byName, toName, crash = false) {
     if (!this.meRef) return;
     const { push, ref, remove } = this.db;
-    const r = push(ref(this.database, `${ARENA}/kills`), { by, to: this.uid, byName, toName, t: Date.now() });
+    const r = push(ref(this.database, `${ARENA}/kills`), { by, to: this.uid, byName, toName, crash, t: Date.now() });
     setTimeout(() => remove(r), 15000); // the feed only needs recent ones
   }
 
@@ -136,7 +138,7 @@ class LocalNet {
       this.peers.delete(m.from);
       this.emit();
     } else if (m.type === 'hit' && m.to === this.id) {
-      this.onHit({ by: m.from, dmg: m.dmg });
+      this.onHit({ by: m.from, dmg: m.dmg, crash: !!m.crash });
     } else if (m.type === 'kill') {
       this.onKill(m.kill);
     }
@@ -173,12 +175,12 @@ class LocalNet {
     this.ch.postMessage({ type: 'state', from: this.id, state: this.last });
   }
 
-  hit(to, dmg) {
-    this.ch.postMessage({ type: 'hit', from: this.id, to, dmg });
+  hit(to, dmg, crash = false) {
+    this.ch.postMessage({ type: 'hit', from: this.id, to, dmg, crash });
   }
 
-  kill(by, byName, toName) {
-    const kill = { by, to: this.id, byName, toName, t: Date.now() };
+  kill(by, byName, toName, crash = false) {
+    const kill = { by, to: this.id, byName, toName, crash, t: Date.now() };
     this.ch.postMessage({ type: 'kill', from: this.id, kill });
     this.onKill(kill);
   }

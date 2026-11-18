@@ -39,11 +39,10 @@ html, body {
   overflow: hidden;
 }
 
-/* sized and centred by main.js (the screen's diagonal), rotated about its centre */
+/* the game at screen size (the camera's turn is drawn inside the Rive files) */
 #scene {
   position: absolute;
-  transform-origin: 50% 50%;
-  will-change: transform;
+  inset: 0;
 }
 
 #world, #shots {
@@ -73,6 +72,9 @@ html, body {
 }
 
 .plane.blink { animation: blink 0.25s steps(2) infinite; }
+/* my plane over the overlay while the NEW WEAPON showcase plays (the solo game draws it on top) */
+.plane.top { z-index: 2; }
+#shots { z-index: 1; }
 @keyframes blink { 50% { opacity: 0.35; } }
 
 /* the phases: the menu shows only the menu; the game shows the HUD */
@@ -83,6 +85,7 @@ html, body {
 #stage[data-phase="menu"] #tags,
 #stage[data-phase="menu"] #stick,
 #stage[data-phase="menu"] #fireBtn,
+#stage[data-phase="menu"] #rocketBtn,
 #stage[data-phase="menu"] #exitBtn { display: none !important; }
 #stage[data-phase="play"] #menu { display: none; }
 
@@ -146,7 +149,7 @@ html, body {
   right: 16px;
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   pointer-events: none;
 }
@@ -230,7 +233,7 @@ html, body {
 #feed {
   position: absolute;
   left: 16px;
-  top: calc(max(12px, env(safe-area-inset-top)) + 128px);
+  top: max(12px, env(safe-area-inset-top));
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -268,7 +271,7 @@ html, body {
 #help {
   position: absolute;
   left: 50%;
-  bottom: max(14px, env(safe-area-inset-bottom));
+  top: max(12px, env(safe-area-inset-top));
   transform: translateX(-50%);
   max-width: calc(100% - 32px);
   padding: 8px 14px;
@@ -318,11 +321,9 @@ html, body {
   backdrop-filter: blur(3px);
 }
 
-/* the menu bends away from the viewer, as the game draws it */
+/* the menu is curved like the game's (an SVG displacement filter set up by main.js) */
 .menu-panel {
   position: relative;
-  transform: rotateY(16deg);
-  transform-origin: left center;
   display: flex;
   flex-direction: column;
   gap: 26px;
@@ -562,7 +563,7 @@ html, body {
 }
 
 /* touch controls (shown on touch screens only) --------------------------- */
-#stick, #fireBtn, #exitBtn { display: none; }
+#stick, #fireBtn, #rocketBtn, #exitBtn { display: none; }
 
 @media (pointer: coarse) {
   #help { display: none; }
@@ -571,7 +572,7 @@ html, body {
     display: block;
     position: absolute;
     left: max(24px, env(safe-area-inset-left));
-    bottom: max(24px, env(safe-area-inset-bottom));
+    bottom: calc(max(24px, env(safe-area-inset-bottom)) + 70px);
     width: 132px;
     height: 132px;
     border-radius: 50%;
@@ -596,7 +597,7 @@ html, body {
     display: block;
     position: absolute;
     right: max(24px, env(safe-area-inset-right));
-    bottom: max(36px, env(safe-area-inset-bottom));
+    bottom: calc(max(36px, env(safe-area-inset-bottom)) + 70px);
     width: 104px;
     height: 104px;
     border-radius: 50%;
@@ -611,6 +612,24 @@ html, body {
   }
 
   #fireBtn.held { transform: scale(0.94); filter: brightness(1.15); }
+
+  /* the rockets' button (the solo game's ROCKET button), while there are rockets */
+  #rocketBtn.on {
+    display: block;
+    position: absolute;
+    right: calc(max(24px, env(safe-area-inset-right)) + 112px);
+    bottom: calc(max(36px, env(safe-area-inset-bottom)) + 120px);
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    border: 2px solid rgba(92, 225, 255, 0.9);
+    background: rgba(6, 18, 30, 0.7);
+    color: rgb(92, 225, 255);
+    font: inherit;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    touch-action: none;
+  }
 
   #exitBtn {
     display: block;

@@ -9,8 +9,9 @@
 //   net.onPlayers = (map) => {}       everyone else in the arena: { id: state }, on every change
 //   net.hit(targetId, dmg, crash)     my bullet hit targetId (crash: our planes collided)
 //   net.onHit = ({ by, dmg, crash }) => {}   a hit on me
-//   net.kill(byId, byName, myName, crash)    I was shot down by byId (or collided with them)
-//   net.onKill = ({ by, to, byName, toName, crash }) => {}   anyone shot down
+//   net.kill(byId, byName, myName, cause)    I went down: cause 'shot' (by byId), 'crash' (into
+//                                     byId) or 'oil' (out of oil, byId is me)
+//   net.onKill = ({ by, to, byName, toName, cause }) => {}   anyone going down
 //   net.leave()
 //
 // Player state (short keys, sent often):
@@ -94,10 +95,10 @@ class FirebaseNet {
     push(ref(this.database, `${ARENA}/inbox/${to}`), { by: this.uid, dmg, crash, t: Date.now() });
   }
 
-  kill(by, byName, toName, crash = false) {
+  kill(by, byName, toName, cause = 'shot') {
     if (!this.meRef) return;
     const { push, ref, remove } = this.db;
-    const r = push(ref(this.database, `${ARENA}/kills`), { by, to: this.uid, byName, toName, crash, t: Date.now() });
+    const r = push(ref(this.database, `${ARENA}/kills`), { by, to: this.uid, byName, toName, cause, t: Date.now() });
     setTimeout(() => remove(r), 15000); // the feed only needs recent ones
   }
 
@@ -180,8 +181,8 @@ class LocalNet {
     this.ch.postMessage({ type: 'hit', from: this.id, to, dmg, crash });
   }
 
-  kill(by, byName, toName, crash = false) {
-    const kill = { by, to: this.id, byName, toName, crash, t: Date.now() };
+  kill(by, byName, toName, cause = 'shot') {
+    const kill = { by, to: this.id, byName, toName, cause, t: Date.now() };
     this.ch.postMessage({ type: 'kill', from: this.id, kill });
     this.onKill(kill);
   }

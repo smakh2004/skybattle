@@ -1,16 +1,19 @@
-/* Sky Blitz - online air combat.
+/* Sky Blitz - online air combat, played like the solo game (game-airplane-v2).
  *
  * Rive files:
- *   riv/world.riv   "World": ocean + clouds (camX, camY, planeX, planeY, heading, planeOn, k)
- *                   "Shots": the bullets, drawn with the game's own code (data, k)
- *   riv/planes.riv  "Plane": the three planes (plane, bank, pitch, fire, hit, burning, dead)
+ *   riv/world.riv   "World": ocean, clouds, smoke trails - drawn at screen size, the camera's turn
+ *                   applied inside the shaders (camX, camY, planeX, planeY, angle, planeOn, k, smoke)
+ *                   "Shots": the solo game's overlay - tracers, rockets, power-up badges, shield
+ *                   bubbles, weapon panels, NEW WEAPON showcase and the HUD bar (overlay.luau)
+ *   riv/planes.riv  "Plane": the Player plane (bank, pitch, fire, hit, burning, dead, pods, podFire,
+ *                   body colours pc1..pc13: every player gets their own colours on each spawn)
  *
- * All game state lives here; Rive draws it. Other players come from net.js (Firebase, or the tabs
+ * All game state lives here; Rive draws it. Other players come from net.js (Firebase, or the windows
  * of this browser when there is no Firebase config). Everyone shares one arena, any number of
- * players; the arena grows as more join, and only the planes near you are loaded into Rive.
+ * players; only the planes near you are loaded into Rive.
  *
- * Units: world positions and speeds are in plane-artboard units, the same for every screen.
- * On screen a unit is `view.k` css px (the game's screen scale x the camera zoom).
+ * Units: world positions and speeds are in plane-artboard units, the same for every screen. On
+ * screen a unit is `view.k` css px (the game's screen scale x the camera zoom).
  */
 // the build version from main.js?v=N (index.html), passed on to every file this page loads, so
 // an update reaches players at once instead of after the browser's cache runs out
@@ -19,8 +22,7 @@ const { createNet } = await import(`./net.js?v=${V}`);
 
 const R = window.rive;
 
-// --- tuning ---------------------------------------------------------------------------------
-// flight, in world units (the game's 230 px/s at its tuning scale k = 1.5 -> 153 u/s)
+// --- tuning (the solo game's numbers, in world units: its px/s at k = 1.5, / 1.5) ---------------
 const FLIGHT = {
   cruise: 153,
   boost: 253,
@@ -30,32 +32,32 @@ const FLIGHT = {
   turnEase: 7, // how fast the turn follows the stick (1/s)
   bankEase: 6,
 };
-
-// The three planes. Guns as in game-airplane-v2 (game.luau fire / enemyFire): muzzles are the
-// barrel tips in artboard units from the plane's centre (-y = nose); bullet speeds in units/s.
-// hit: the plane's outline as an ellipse, [half wingspan, half length] in artboard units
-// (measured from the planes' art), turned with the plane, so wingtips count and empty air doesn't.
-const PLANES = {
-  1: {
-    name: 'RED FALCON', hp: 100, speed: 1, hit: [42, 45], dmg: 9,
-    pattern: 'pairs', muzzle: 633, spread: 0.01, muzzles: [[-4.0, -27], [3.8, -27]],
-  },
-  2: {
-    name: 'BLUE HORNET', hp: 85, speed: 1.08, hit: [37, 32], dmg: 6,
-    pattern: 'volley', gap: 0.14, muzzle: 728, spread: 0.03, muzzles: [[-8.8, -33.3], [9.1, -33.3]],
-  },
-  3: {
-    name: 'GOLD BOMBER', hp: 150, speed: 0.88, hit: [55, 47], dmg: 16,
-    pattern: 'volley', gap: 0.25, muzzle: 567, spread: 0.03, muzzles: [[-13.2, -32.4], [13.2, -32.4]],
-  },
-};
-const STAT_MAX = { hp: 150, speed: 1.08, fire: 85 }; // for the menu's meters
+const MAX_HP = 100;
+const LOW_HP = 20; // at or below this the plane is on fire (game.luau LOW_HP)
+const HIT = [42, 45]; // the plane's outline as an ellipse: half wingspan, half length (artboard units)
+// guns (game.luau fire / fireGun / firePods): a pair every 0.25-0.32 s, one gun, the other a moment
+// later; the pods (Wing Guns) fire one bullet each with every pair
+const GUN = { muzzle: 633, spread: 0.01, dmg: 9, muzzles: [[-4.0, -27], [3.8, -27]] };
+const POD = { ammo: 120, dmg: 6, muzzles: [[-14.2, -27.2], [14.0, -27.2]] };
+// rockets (game.luau MISSILE_*, ROCKET_*), world units
+const ROCKET = { ammo: 12, cooldown: 0.22, speed: [173, 767], turn: 7, dmg: 40, splash: 12, splashR: 70, side: 28, range: 1300 };
+const SHIELD_HITS = 8; // the Shield power-up blocks this many hits
+const REPAIR_HP = 35;
+const OIL = { max: 100, drain: 1.25, refill: 55, below: 60, urgent: 30 };
+const REPAIR = { below: 70, urgent: 40 };
+const PICKUP = { first: 8, min: 16, max: 24, reach: 52, ahead: 470, side: 200, gone: 1100 };
+const KIND = { guns: 1, rockets: 2, repair: 3, oil: 4, shield: 5 }; // the overlay's badge numbers
+const COLLECT_TIME = 0.75;
 
 const PLANE_ARTBOARD = 320; // planes.riv's artboard size (units)
+// The Player plane's body colours (planes.riv pc1..pc13): each player's plane is painted with them
+// turned to its own hue. HUES: the palettes handed out on spawn (degrees from the red).
+const BODY = ['E33B30', 'B73039', 'F16153', 'E94841', '6F4241', '7B514B', 'CB342C', 'F85755', '953528',
+  'FF593C', '78534A', 'F15D49', '855752'];
+const HUES = [0, 205, 120, 45, 275, 175, 320, 90, 235, 20, 150, 300];
 
 // Quality: 2 high, 1 medium, 0 low. It starts high (or where this computer settled last time) and
-// steps down by itself when frames take too long. Soft layers (sea, clouds, smoke, bullet glow)
-// never render above 1 pixel per css px - extra sharpness there costs a lot and shows nothing.
+// steps down by itself when frames take too long. Soft layers never render above 1 px per css px.
 const QUALITY = [
   { world: 0.6, planes: 1, detail: 0, smoke: 0.4 }, // low
   { world: 0.8, planes: 1.25, detail: 0.5, smoke: 0.7 }, // medium
@@ -70,23 +72,20 @@ const Q = () => QUALITY[qLevel];
 const worldDpr = () => Math.min(devicePixelRatio || 1, 1) * Q().world;
 const planeDpr = () => Math.min(devicePixelRatio || 1, Q().planes);
 const BULLET_LIFE = 1.4; // s
-// the arena's radius in world units (past it the plane is turned back toward the battle); it grows
-// with the number of players so a crowd still has room
-const arenaRadius = () => 1200 + 160 * Math.sqrt(remotes.size + 1);
+const SPAWN_R = () => 700 + 120 * Math.sqrt(remotes.size + 1); // where planes (re)spawn
 const BOARD_ROWS = 8; // the scoreboard shows the top 8 (and you, if you are lower)
-const RESPAWN = 3; // s after being shot down
-const SHIELD = 2.5; // s of invulnerability after (re)spawning
+const RESPAWN = 3; // s after going down
+const SPAWN_SHIELD = 2.5; // s of invulnerability after (re)spawning
 const SCORE = { hit: 10, kill: 100 };
 const SEND_HZ = 12;
-// the camera looks ahead of the plane, follows it, and turns with it a little late
-// lead: s of travel ahead; ease: position follow (1/s); turn: angle catch-up (1/s)
-// zoom: how far out the camera sits (1 = the game's own scale, smaller = further away)
-const CAMERA = { lead: 0.75, ease: 3.2, turn: 2.0, zoom: 0.62 };
+// the camera looks ahead of the plane (so the plane sits low on the screen), follows it, and turns
+// with it a little late. lead: s of travel ahead; ease: follow (1/s); turn: angle catch-up (1/s);
+// zoom: how far out (1 = the game's own scale, smaller = further away)
+const CAMERA = { lead: 1.0, ease: 3.2, turn: 2.0, zoom: 0.62 };
 
 // --- dom ------------------------------------------------------------------------------------
 const $ = (s) => document.querySelector(s);
 const stage = $('#stage');
-const scene = $('#scene');
 const worldCanvas = $('#world');
 const shotsCanvas = $('#shots');
 const planesLayer = $('#planes');
@@ -96,6 +95,34 @@ const joinBtn = $('#joinBtn');
 const menuStatus = $('#menuStatus');
 const banner = $('#banner');
 const feed = $('#feed');
+
+// --- helpers --------------------------------------------------------------------------------
+const ease = (rate, dt) => 1 - Math.exp(-rate * dt);
+const rand = (lo, hi) => lo + Math.random() * (hi - lo);
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const cleanName = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '').replace(/\s+/g, ' ').trim().slice(0, 16);
+const backOut = (t) => { const c1 = 1.70158, u = t - 1; return 1 + (c1 + 1) * u * u * u + c1 * u * u; };
+
+// the body colours turned by `deg` degrees of hue: [[r, g, b] x 13]
+const paletteCache = new Map();
+function palette(deg) {
+  if (paletteCache.has(deg)) return paletteCache.get(deg);
+  const out = BODY.map((hex) => {
+    let r = parseInt(hex.slice(0, 2), 16) / 255, g = parseInt(hex.slice(2, 4), 16) / 255, b = parseInt(hex.slice(4, 6), 16) / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    let h = 0;
+    if (d) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h = (h * 60 + 360 + deg) % 360;
+    const s = mx ? d / mx : 0, v = mx;
+    const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
+    const [rr, gg, bb] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    return [Math.round((rr + m) * 255), Math.round((gg + m) * 255), Math.round((bb + m) * 255)];
+  });
+  paletteCache.set(deg, out);
+  return out;
+}
 
 // --- rive helpers ---------------------------------------------------------------------------
 function loadRive(opts) {
@@ -131,14 +158,13 @@ async function planesSource() {
 
 /** One plane on screen: its own canvas and planes.riv instance. */
 class PlaneView {
-  // crop: show only the middle of the artboard (the menu's big plane: no smoke there)
-  constructor(canvas, crop = false) {
+  constructor(canvas) {
     this.canvas = canvas;
-    this.crop = crop;
     this.size = 150;
     this.r = null;
     this.vm = null;
     this.last = {};
+    this.hue = null;
   }
   async load() {
     this.r = await loadRive({
@@ -146,9 +172,7 @@ class PlaneView {
       canvas: this.canvas,
       artboard: 'Plane',
       useOffscreenRenderer: true, // many planes share one GL context
-      layout: this.crop
-        ? new R.Layout({ fit: R.Fit.Contain, alignment: R.Alignment.Center, minX: 80, minY: 80, maxX: 240, maxY: 240 })
-        : new R.Layout({ fit: R.Fit.Contain, alignment: R.Alignment.Center }),
+      layout: new R.Layout({ fit: R.Fit.Contain, alignment: R.Alignment.Center }),
     });
     this.vm = this.r.viewModelInstance;
     if (!this.vm) console.warn('planes.riv: no view model bound');
@@ -170,13 +194,22 @@ class PlaneView {
     const t = this.vm && this.vm.trigger(name);
     if (t) t.trigger();
   }
-  /** Place on screen (scene px, centre) and turn to the heading. */
-  place(x, y, heading) {
+  /** Paint the body in hue `deg`. */
+  colors(deg) {
+    if (!this.vm || this.hue === deg) return;
+    this.hue = deg;
+    palette(deg).forEach(([r, g, b], i) => {
+      const c = this.vm.color(`pc${i + 1}`);
+      if (c) c.argb(255, r, g, b);
+    });
+  }
+  /** Place on screen (css px, centre) and turn it (radians, screen). */
+  place(x, y, rot) {
     const h = this.size / 2;
-    this.canvas.style.transform = `translate(${x - h}px, ${y - h}px) rotate(${heading}rad)`;
+    this.canvas.style.transform = `translate(${x - h}px, ${y - h}px) rotate(${rot}rad)`;
   }
   /** The game draws planes at k x their artboard. The artboard is 320 units: the plane in the
-   * middle with room around it for its smoke trail and explosion, so they are never cut off. */
+   * middle with room around it for its smoke and explosion, so they are never cut off. */
   resize(k) {
     this.setSize(Math.round(PLANE_ARTBOARD * k));
   }
@@ -192,11 +225,12 @@ class PlaneView {
     if (on) this.r.startRendering(); else this.r.stopRendering();
   }
   pose(p) {
-    this.num('plane', p.plane);
     this.num('bank', +p.bank.toFixed(3));
     this.num('pitch', +p.pitch.toFixed(3));
+    this.num('pods', +p.podScale.toFixed(3));
     this.bool('burning', p.burning);
     this.bool('dead', p.dead);
+    this.colors(p.hue);
   }
   dispose() {
     try { this.r && this.r.cleanup(); } catch {}
@@ -205,7 +239,7 @@ class PlaneView {
 }
 
 // --- state ----------------------------------------------------------------------------------
-const view = { w: innerWidth, h: innerHeight, sw: innerWidth, sh: innerHeight, unit: 1, k: 1 };
+const view = { sw: innerWidth, sh: innerHeight, unit: 1, k: 1 };
 const cam = { x: 0, y: 0, angle: 0 };
 let phase = 'menu'; // 'menu' | 'joining' | 'play'
 let net = null;
@@ -216,39 +250,59 @@ let sendT = 0;
 const me = {
   id: 'me',
   name: '',
-  plane: 1,
+  hue: 0,
   x: 0, y: 0,
   heading: 0, // rad, 0 = nose up (north), clockwise
   speed: FLIGHT.cruise,
   turn: 0,
   bank: 0,
   pitch: 0,
-  hp: 100,
+  hp: MAX_HP,
+  oil: OIL.max,
   burning: false,
   dead: false,
   deadT: 0,
-  shield: 0,
-  lastBy: null,
+  spawnShield: 0, // s of invulnerability left after spawning
   score: 0,
-  shots: 0, // guns fired (sent, so the others can draw my bullets)
+  shots: 0, // gun shots fired (sent, so the others can draw my bullets)
+  podShots: 0, // pod volleys fired
+  rockets: 0, // rockets fired
+  rocketTarget: '',
   gunT: 0,
   pending: [], // the second gun of a pair, fired a moment later: [{ t, gun }]
+  // power-ups (game.luau: podActive / podAmmo, rktActive / rktAmmo, shieldHits)
+  podAmmo: 0,
+  podT: 0,
+  podScale: 0,
+  rktAmmo: 0,
+  rktCd: 0,
+  rktSide: 1,
+  shieldHits: 0,
+  shieldT: 0,
+  shieldFlash: 0,
+  abOrder: [],
   view: null,
 };
 const remotes = new Map(); // id -> remote player
-const bullets = [];
+const bullets = []; // { owner, mine, pod, dmg, x, y, vx, vy, dx, dy, muzzle, t }
 const sparks = []; // where bullets struck a plane: { x, y, t }
 const SPARK_LIFE = 0.25;
-// Smoke trails: burning planes leave puffs in the sky (world space), so the smoke stays where the
-// plane was and draws its path, growing and fading. world.riv draws them under the planes.
-// FIRE: each plane's flames (wings, body) in artboard units from its centre; puffs start there.
-const FIRE = {
-  1: [[29.3, -1.5], [-28.7, -12.6], [0.3, 24]],
-  2: [[18.5, -2.1], [-18.6, -0.6], [0.7, 11.3]],
-  3: [[25.3, -6.5], [-24.5, -6.5], [0.3, 11.6]],
-};
+const missiles = []; // { owner, mine, tgt, x, y, vx, vy, tx, ty, age, trav, smokeT, dead }
+const rings = []; // blast shockwaves { x, y, t, max, r }
+const pickups = []; // my power-up badges { id, kind, x, y, t }
+const collects = []; // badges being collected { id, kind, x, y, t }
+let pickupT = PICKUP.first;
+let lastPickup = null;
+let pickupId = 1;
+let introSeq = 0;
+let introKind = 1;
+let introUntil = 0; // while the showcase plays my plane is drawn over it (as in the solo game)
+
+// Smoke trails: burning planes (and rockets) leave puffs in the sky, so the smoke stays where it was
+// left and draws the path. FIRE: the plane's flames (wings, body) in artboard units from its centre.
+const FIRE = [[29.3, -1.5], [-28.7, -12.6], [0.3, 24]];
 const SMOKE = { every: 0.03, life: [2.4, 3.2], r0: 4, r1: [18, 28], alpha: 0.42, max: 600, fall: 1.0 };
-const smoke = []; // { x, y, vx, vy, t, life, r1, a }
+const smoke = []; // { x, y, vx, vy, t, life, r0, r1, a, light }
 
 // --- input ----------------------------------------------------------------------------------
 const keys = new Set();
@@ -260,6 +314,7 @@ addEventListener('keydown', (e) => {
   if (e.repeat) return;
   keys.add(e.code);
   if (e.code === 'Escape') leaveGame();
+  if (e.code === 'KeyQ') fireRocket();
   if (e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -269,7 +324,6 @@ addEventListener('blur', () => keys.clear());
 worldCanvas.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse' && phase === 'play') touch.fire = true; });
 addEventListener('pointerup', (e) => { if (e.pointerType === 'mouse') touch.fire = false; });
 
-// touch stick
 const stick = $('#stick');
 const knob = $('#knob');
 function stickMove(e) {
@@ -307,6 +361,7 @@ fireBtn.addEventListener('pointerdown', (e) => {
 const fireEnd = () => { touch.fire = false; fireBtn.classList.remove('held'); };
 fireBtn.addEventListener('pointerup', fireEnd);
 fireBtn.addEventListener('pointercancel', fireEnd);
+$('#rocketBtn').addEventListener('pointerdown', (e) => { e.preventDefault(); fireRocket(); });
 $('#exitBtn').addEventListener('click', () => leaveGame());
 
 function readInput() {
@@ -324,26 +379,29 @@ function readInput() {
     if (Math.abs(ax) > 0.15) x = ax;
     if (Math.abs(ay) > 0.15) y = ay;
     if ((p.buttons[0] && p.buttons[0].pressed) || (p.buttons[7] && p.buttons[7].value > 0.3)) fire = true;
+    if (p.buttons[2] && p.buttons[2].pressed && !p._rk) fireRocket();
+    p._rk = p.buttons[2] && p.buttons[2].pressed;
   }
-  input.x = Math.max(-1, Math.min(1, x));
-  input.y = Math.max(-1, Math.min(1, y));
+  input.x = clamp(x, -1, 1);
+  input.y = clamp(y, -1, 1);
   input.fire = fire;
 }
 
-// --- helpers ----------------------------------------------------------------------------------
-const ease = (rate, dt) => 1 - Math.exp(-rate * dt);
-const rand = (lo, hi) => lo + Math.random() * (hi - lo);
-const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const cleanName = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 _\-.]/g, '').replace(/\s+/g, ' ').trim().slice(0, 16);
-
-// world -> scene px (the rotating square); scene px -> screen px (after the camera's turn)
-const toScene = (x, y) => [view.w / 2 + (x - cam.x) * view.k, view.h / 2 + (y - cam.y) * view.k];
-function sceneToScreen(sx, sy) {
-  const dx = sx - view.w / 2, dy = sy - view.h / 2;
-  const c = Math.cos(-cam.angle), s = Math.sin(-cam.angle);
-  return [view.sw / 2 + dx * c - dy * s, view.sh / 2 + dx * s + dy * c];
+// --- screen mapping ---------------------------------------------------------------------------
+// world -> screen: around the camera, turned by its angle
+function toScreen(x, y) {
+  const dx = (x - cam.x) * view.k, dy = (y - cam.y) * view.k;
+  const c = Math.cos(cam.angle), s = Math.sin(cam.angle);
+  return [view.sw / 2 + c * dx + s * dy, view.sh / 2 - s * dx + c * dy];
 }
+// a world direction -> screen direction
+function dirToScreen(dx, dy) {
+  const c = Math.cos(cam.angle), s = Math.sin(cam.angle);
+  return [c * dx + s * dy, -s * dx + c * dy];
+}
+// world -> the world shader's frame: around the screen centre, not turned (it turns it itself)
+const toWorldFrame = (x, y) => [view.sw / 2 + (x - cam.x) * view.k, view.sh / 2 + (y - cam.y) * view.k];
+const onScreen = (sx, sy, m) => sx > -m && sy > -m && sx < view.sw + m && sy < view.sh + m;
 
 let bannerT = 0;
 function showBanner(html, secs = 2.2) {
@@ -364,22 +422,45 @@ function addFeed(html) {
 // --- my plane --------------------------------------------------------------------------------
 function spawn(p) {
   const a = Math.random() * Math.PI * 2;
-  const r = Math.sqrt(Math.random()) * arenaRadius() * 0.6;
+  const r = Math.sqrt(Math.random()) * SPAWN_R();
   p.x = Math.cos(a) * r;
   p.y = Math.sin(a) * r;
   p.heading = Math.atan2(-p.x, p.y) + rand(-0.5, 0.5); // roughly toward the middle
-  p.speed = FLIGHT.cruise * PLANES[p.plane].speed;
+  p.speed = FLIGHT.cruise;
   p.turn = p.bank = p.pitch = 0;
-  p.hp = PLANES[p.plane].hp;
+  p.hp = MAX_HP;
+  p.oil = OIL.max;
   p.dead = false;
   p.burning = false;
-  p.shield = SHIELD;
+  p.spawnShield = SPAWN_SHIELD;
   p.lastBy = null;
   p.pending.length = 0;
+  // a fresh plane: new colours, no power-ups (as a new game in the solo game)
+  let hue = p.hue;
+  while (hue === p.hue) hue = HUES[Math.floor(Math.random() * HUES.length)];
+  p.hue = hue;
+  p.podAmmo = 0; p.podT = 0; p.podScale = 0;
+  p.rktAmmo = 0;
+  p.shieldHits = 0; p.shieldT = 0; p.shieldFlash = 0;
+  p.abOrder = [];
+  pickups.length = 0;
+  pickupT = PICKUP.first;
+}
+
+function goDown(cause, byId, byName) {
+  if (me.dead) return;
+  me.dead = true;
+  me.burning = true;
+  me.deadT = 0;
+  me.hp = 0;
+  net && net.kill(byId || session.id, byName || me.name, me.name, cause);
+  if (cause === 'oil') showBanner('OUT OF OIL<small>THE ENGINE STOPPED</small>', RESPAWN);
+  else if (cause === 'crash') showBanner(`COLLISION<small>WITH ${esc(byName)}</small>`, RESPAWN);
+  else showBanner(`SHOT DOWN<small>BY ${esc(byName)}</small>`, RESPAWN);
+  net && net.send(myState());
 }
 
 function fly(p, dt, ctl) {
-  const spec = PLANES[p.plane];
   if (p.dead) {
     // falling: slow down and stop turning; the lose timeline does the rest
     p.speed += (0 - p.speed) * ease(1.6, dt);
@@ -391,32 +472,33 @@ function fly(p, dt, ctl) {
       showBanner('BACK IN THE AIR', 1.2);
     }
   } else {
-    const target = (ctl.y < 0 ? FLIGHT.cruise + (FLIGHT.boost - FLIGHT.cruise) * -ctl.y
-      : FLIGHT.cruise - (FLIGHT.cruise - FLIGHT.brake) * ctl.y) * spec.speed;
+    const target = ctl.y < 0 ? FLIGHT.cruise + (FLIGHT.boost - FLIGHT.cruise) * -ctl.y
+      : FLIGHT.cruise - (FLIGHT.cruise - FLIGHT.brake) * ctl.y;
     p.speed += (target - p.speed) * ease(FLIGHT.accel, dt);
-    let steer = ctl.x;
-    // outside the arena: the plane is turned back toward the battle
-    const dist = Math.hypot(p.x, p.y);
-    const arena = arenaRadius();
-    if (dist > arena) {
-      const want = wrap(Math.atan2(-p.x, p.y) - p.heading);
-      const push = Math.min(1, (dist - arena) / 250);
-      steer = Math.max(-1, Math.min(1, steer + Math.sign(want) * push * Math.min(1, Math.abs(want) * 2)));
-    }
-    p.turn += (steer - p.turn) * ease(FLIGHT.turnEase, dt);
+    p.turn += (ctl.x - p.turn) * ease(FLIGHT.turnEase, dt);
+    // oil drains while flying; when it runs out the engine stops (game.luau OIL)
+    p.oil = Math.max(0, p.oil - OIL.drain * dt);
+    if (p.oil <= 0) goDown('oil');
   }
   p.heading = wrap(p.heading + p.turn * FLIGHT.turn * dt);
   p.x += Math.sin(p.heading) * p.speed * dt;
   p.y -= Math.cos(p.heading) * p.speed * dt;
   p.bank += (p.turn - p.bank) * ease(FLIGHT.bankEase, dt);
   p.pitch += ((p.dead ? 0 : ctl.y) - p.pitch) * ease(4, dt);
-  p.shield = Math.max(0, p.shield - dt);
+  p.spawnShield = Math.max(0, p.spawnShield - dt);
+  p.burning = p.dead || p.hp <= LOW_HP;
+  // pods: pop out with a little overshoot, fold away when the ammo is gone (game.luau updatePower)
+  const podOn = p.podAmmo > 0;
+  p.podT = podOn ? Math.min(1, p.podT + dt * 3) : Math.max(0, p.podT - dt * 4);
+  p.podScale = podOn ? backOut(p.podT) : p.podT * p.podT;
+  p.shieldT = p.shieldHits > 0 ? Math.min(1, p.shieldT + dt * 4) : Math.max(0, p.shieldT - dt * 4);
+  p.shieldFlash = Math.max(0, p.shieldFlash - dt * 3);
+  p.rktCd = Math.max(0, p.rktCd - dt);
   guns(p, dt, ctl.fire && !p.dead);
 }
 
-/** Each plane fires its own way. Every gun fired counts in p.shots (the others replay them). */
+/** The guns: a pair every 0.25-0.32 s (one gun, the other a moment later), and both pods with it. */
 function guns(p, dt, wantFire) {
-  const g = PLANES[p.plane];
   p.gunT -= dt;
   for (let i = p.pending.length - 1; i >= 0; i--) {
     const q = p.pending[i];
@@ -427,47 +509,236 @@ function guns(p, dt, wantFire) {
     }
   }
   if (!wantFire || p.gunT > 0) return;
-  if (g.pattern === 'pairs') {
-    // RED FALCON: one gun now, the other a random moment later; one `shoot` timeline per pair
-    const interval = 0.11 * rand(2.3, 2.9);
-    const first = p.shots % 2; // alternate, so the others can tell which gun fired
-    shoot(p, first, true);
-    p.shots += 1;
-    p.pending.push({ t: interval * rand(0.35, 0.65), gun: 1 - first });
-    p.view && p.view.fire('fire');
-    p.gunT = interval;
-  } else {
-    // BLUE HORNET / GOLD BOMBER: both guns at once, every `gap` while the trigger is held
-    shoot(p, 0, true);
-    shoot(p, 1, true);
-    p.shots += 1;
-    p.view && p.view.fire('fire');
-    p.gunT = g.gap;
-  }
+  const interval = 0.11 * rand(2.3, 2.9);
+  const first = p.shots % 2; // alternate, so the others can tell which gun fired
+  shoot(p, first, true);
+  p.shots += 1;
+  p.pending.push({ t: interval * rand(0.35, 0.65), gun: 1 - first });
+  p.view && p.view.fire('fire');
+  p.gunT = interval;
+  firePods(p);
 }
 
-/** A bullet from plane p's gun (0 / 1). `mine`: I fired it, so I check what it hits. */
-function shoot(p, gun, mine) {
-  const g = PLANES[p.plane];
-  const [mx, my] = g.muzzles[gun];
+function firePods(p) {
+  if (p.podAmmo <= 0 || p.podT < 0.6) return;
+  podVolley(p, true);
+  p.podAmmo = Math.max(0, p.podAmmo - 2);
+  p.podShots += 1;
+  if (p.podAmmo <= 0) dropAbility('guns');
+}
+
+function podVolley(p, mine) {
+  shoot(p, 0, mine, true);
+  shoot(p, 1, mine, true);
+  p.view && p.view.fire('podFire');
+}
+
+/** A bullet from plane p's gun (0 / 1), or its pod. `mine`: I fired it, so I check what it hits. */
+function shoot(p, gun, mine, pod = false) {
+  const [mx, my] = (pod ? POD : GUN).muzzles[gun];
   const c = Math.cos(p.heading), sn = Math.sin(p.heading);
-  const a = p.heading + rand(-g.spread, g.spread);
+  const a = p.heading + rand(-GUN.spread, GUN.spread) * (pod ? 2 : 1);
   bullets.push({
     owner: p.id,
     mine,
-    plane: p.plane,
-    dmg: g.dmg,
+    pod,
+    dmg: pod ? POD.dmg : GUN.dmg,
     x: p.x + mx * c - my * sn,
     y: p.y + mx * sn + my * c,
-    // the plane's own speed carries the shot, the barrel adds its muzzle speed
-    vx: Math.sin(p.heading) * p.speed + Math.sin(a) * g.muzzle,
-    vy: -Math.cos(p.heading) * p.speed - Math.cos(a) * g.muzzle,
-    dx: Math.sin(a), dy: -Math.cos(a), // the tracer points along the barrel
-    muzzle: g.muzzle,
+    vx: Math.sin(p.heading) * p.speed + Math.sin(a) * GUN.muzzle,
+    vy: -Math.cos(p.heading) * p.speed - Math.cos(a) * GUN.muzzle,
+    dx: Math.sin(a), dy: -Math.cos(a),
+    muzzle: GUN.muzzle,
     t: 0,
   });
 }
 
+// --- abilities (game.luau claimSlot / takePickup) --------------------------------------------
+function abilityOn(p, k) {
+  return k === 'rockets' ? p.rktAmmo > 0 : k === 'shield' ? p.shieldHits > 0 : p.podAmmo > 0;
+}
+function dropAbility(k) {
+  if (k === 'rockets') me.rktAmmo = 0;
+  else if (k === 'shield') me.shieldHits = 0;
+  else me.podAmmo = 0;
+  me.abOrder = me.abOrder.filter((o) => o !== k);
+}
+// at most two abilities at once: taking a third ends the oldest
+function claimSlot(k) {
+  const order = me.abOrder.filter((o) => o !== k && abilityOn(me, o));
+  if (order.length >= 2) dropAbility(order.shift());
+  order.push(k);
+  me.abOrder = order;
+}
+
+function takePickup(pk) {
+  collects.push({ id: pk.id, kind: pk.kind, x: pk.x, y: pk.y, t: 0, bt: pk.t });
+  const k = pk.kind;
+  if (k === KIND.repair) { me.hp = Math.min(MAX_HP, me.hp + REPAIR_HP); return; }
+  if (k === KIND.oil) { me.oil = Math.min(OIL.max, me.oil + OIL.refill); return; }
+  const name = k === KIND.rockets ? 'rockets' : k === KIND.shield ? 'shield' : 'guns';
+  const refill = abilityOn(me, name);
+  claimSlot(name);
+  if (name === 'rockets') me.rktAmmo = ROCKET.ammo;
+  else if (name === 'shield') me.shieldHits = SHIELD_HITS;
+  else me.podAmmo = POD.ammo;
+  if (!refill) {
+    introSeq += 1;
+    introKind = name === 'rockets' ? 2 : name === 'shield' ? 3 : 1;
+    introUntil = performance.now() + 1800;
+  }
+}
+
+// a badge now and then, never two at once, for what the plane needs (game.luau updatePower)
+function updatePickups(dt) {
+  const abilities = ['guns', 'rockets', 'shield'].filter((k) => abilityOn(me, k)).length;
+  const room = abilities < 2;
+  const due = {
+    guns: room && (me.podAmmo <= 0 || me.podAmmo < POD.ammo * 0.5),
+    rockets: room && (me.rktAmmo <= 0 || me.rktAmmo < ROCKET.ammo * 0.5),
+    repair: me.hp <= REPAIR.below,
+    oil: me.oil <= OIL.below,
+    shield: room && me.shieldHits === 0,
+  };
+  if (!me.dead && pickups.length === 0 && Object.values(due).some(Boolean)) {
+    if (me.oil <= OIL.urgent) pickupT = Math.min(pickupT, 3);
+    pickupT -= dt;
+    if (pickupT <= 0) {
+      const list = Object.keys(due).filter((k) => due[k] && k !== lastPickup);
+      let kind = list.length ? list[Math.floor(Math.random() * list.length)] : due.repair ? 'repair' : due.oil ? 'oil' : (lastPickup || 'guns');
+      if (due.repair && me.hp <= REPAIR.urgent) kind = 'repair';
+      if (due.oil && me.oil <= OIL.urgent) kind = 'oil';
+      lastPickup = kind;
+      // ahead of the plane, just past the top of the screen, as the solo game's badges come in
+      const side = rand(-PICKUP.side, PICKUP.side);
+      const fx = Math.sin(cam.angle), fy = -Math.cos(cam.angle);
+      pickups.push({
+        id: pickupId++, kind: KIND[kind],
+        x: me.x + fx * PICKUP.ahead - fy * side,
+        y: me.y + fy * PICKUP.ahead + fx * side,
+        t: 0,
+      });
+      pickupT = rand(PICKUP.min, PICKUP.max);
+    }
+  }
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    const pk = pickups[i];
+    pk.t += dt;
+    const d = Math.hypot(pk.x - me.x, pk.y - me.y);
+    if (!me.dead && d < PICKUP.reach) {
+      pickups.splice(i, 1);
+      takePickup(pk);
+    } else if (d > PICKUP.gone) {
+      pickups.splice(i, 1);
+    }
+  }
+  for (let i = collects.length - 1; i >= 0; i--) {
+    collects[i].t += dt;
+    if (collects[i].t > COLLECT_TIME) collects.splice(i, 1);
+  }
+}
+
+// --- rockets (game.luau fireRocket / updateMissiles / explode) ----------------------------------
+// Q: a rocket off the next wing at the nearest other plane in range (none in range: no launch)
+function fireRocket() {
+  if (phase !== 'play' || me.dead || me.rktAmmo <= 0 || me.rktCd > 0) return;
+  let best = null, bestD = ROCKET.range;
+  for (const r of remotes.values()) {
+    if (!r.seen || r.dead) continue;
+    const d = Math.hypot(r.x - me.x, r.y - me.y);
+    if (d < bestD) { best = r; bestD = d; }
+  }
+  if (!best) { showBanner('NO TARGET IN RANGE', 0.8); return; }
+  launch(me, best.id, true);
+  me.rockets += 1;
+  me.rocketTarget = best.id;
+  me.rktCd = ROCKET.cooldown;
+  me.rktAmmo -= 1;
+  if (me.rktAmmo <= 0) dropAbility('rockets');
+}
+
+function launch(p, targetId, mine) {
+  const side = p.rktSide || 1;
+  p.rktSide = -side;
+  const c = Math.cos(p.heading), s = Math.sin(p.heading);
+  // off the wing, pushed out sideways and a little ahead
+  const lx = side * ROCKET.side, ly = 0;
+  const vx = side * 173, vy = -80;
+  const x = p.x + lx * c - ly * s, y = p.y + lx * s + ly * c;
+  const tgt = targetId === (session && session.id) ? me : remotes.get(targetId) || null;
+  missiles.push({
+    owner: p.id, mine, tgt,
+    x, y,
+    vx: vx * c - vy * s + Math.sin(p.heading) * p.speed,
+    vy: vx * s + vy * c - Math.cos(p.heading) * p.speed,
+    tx: tgt ? tgt.x : x, ty: tgt ? tgt.y : y,
+    age: 0, trav: 0, smokeT: 0, dead: false,
+  });
+}
+
+function updateMissiles(dt) {
+  for (const m of missiles) {
+    m.age += dt;
+    const tg = m.tgt;
+    if (tg && tg.dead) m.tgt = null;
+    if (m.tgt) { m.tx = m.tgt.x; m.ty = m.tgt.y; }
+    const ramp = Math.min(1, m.age / 0.7);
+    const speed = ROCKET.speed[0] + (ROCKET.speed[1] - ROCKET.speed[0]) * ramp * ramp;
+    let heading = Math.atan2(m.vx, -m.vy);
+    const want = Math.atan2(m.tx - m.x, m.y - m.ty);
+    const diff = wrap(want - heading);
+    const rate = ROCKET.turn * clamp(m.age / 0.3, 0.25, 1);
+    heading += clamp(diff, -rate * dt, rate * dt);
+    m.vx = Math.sin(heading) * speed;
+    m.vy = -Math.cos(heading) * speed;
+    m.x += m.vx * dt;
+    m.y += m.vy * dt;
+    m.trav += speed * dt;
+    // the light grey smoke trail
+    m.smokeT -= dt;
+    if (m.smokeT <= 0) {
+      m.smokeT = 0.02;
+      smoke.push({
+        x: m.x - Math.sin(heading) * 30, y: m.y + Math.cos(heading) * 30,
+        vx: rand(-6, 6), vy: rand(-6, 6), t: 0, life: rand(0.55, 0.95),
+        r0: 2, r1: rand(7, 11), a: 0.55, light: true,
+      });
+    }
+    if (m.tgt && touches(m.x - m.vx * dt, m.y - m.vy * dt, m.x, m.y, m.tgt)) explode(m, m.tgt);
+    else if (!m.tgt && (m.x - m.tx) ** 2 + (m.y - m.ty) ** 2 < 18 * 18) explode(m, null);
+    if (m.age > 5) m.dead = true;
+  }
+  for (let i = missiles.length - 1; i >= 0; i--) if (missiles[i].dead) missiles.splice(i, 1);
+  for (let i = rings.length - 1; i >= 0; i--) {
+    rings[i].t += dt;
+    if (rings[i].t > rings[i].max) rings.splice(i, 1);
+  }
+}
+
+function explode(m, hitP) {
+  m.dead = true;
+  rings.push({ x: m.x, y: m.y, t: 0, max: 0.35, r: ROCKET.splashR * 1.3 });
+  for (let i = 0; i < 6; i++) sparks.push({ x: m.x + rand(-14, 14), y: m.y + rand(-14, 14), t: rand(0, 0.08) });
+  for (let i = 0; i < 8; i++) {
+    smoke.push({ x: m.x + rand(-10, 10), y: m.y + rand(-10, 10), vx: rand(-20, 20), vy: rand(-20, 20), t: 0,
+      life: rand(0.8, 1.3), r0: 6, r1: rand(18, 26), a: 0.5, light: true });
+  }
+  if (!m.mine || phase !== 'play') return;
+  // only my own rockets deal damage (the shooter decides; the target takes it)
+  for (const r of remotes.values()) {
+    if (!r.seen || r.dead) continue;
+    let dmg = 0;
+    if (r === hitP) dmg = ROCKET.dmg;
+    else if (Math.hypot(r.x - m.x, r.y - m.y) < ROCKET.splashR + 30) dmg = ROCKET.splash;
+    if (dmg > 0) {
+      net && net.hit(r.id, dmg);
+      if (!r.shieldHits) me.score += SCORE.hit;
+      r.view && r.view.fire('hit');
+    }
+  }
+}
+
+// --- bullets ----------------------------------------------------------------------------------
 function updateBullets(dt) {
   for (let i = sparks.length - 1; i >= 0; i--) {
     sparks[i].t += dt;
@@ -482,20 +753,21 @@ function updateBullets(dt) {
     b.y += b.vy * dt;
     let gone = b.t > BULLET_LIFE;
     if (!gone && live) {
-      // every bullet stops where it touches a plane on this screen. Only my own bullets count:
-      // the shooter decides hits and the target takes the damage; everyone else's bullets just
-      // stop and spark here, so what each player sees matches.
+      // every bullet stops where it touches a plane on this screen; only mine deal damage (the
+      // shooter decides hits, the target takes the damage), so every screen agrees
       for (const p of planesForHits(b.owner)) {
         const at = touches(px, py, b.x, b.y, p);
         if (!at) continue;
         gone = true;
         sparks.push({ x: at[0], y: at[1], t: 0 });
-        if (p.shielded || p.shield > 0) break; // the spawn shield: a spark, no damage
+        if (p.shielded || p.spawnShield > 0) break;
         if (b.mine && p !== me) {
           net && net.hit(p.id, b.dmg);
-          me.score += SCORE.hit;
-          p.view && p.view.fire('hit');
-          p.hpShown = Math.max(0, p.hpShown - b.dmg);
+          if (!p.shieldHits) {
+            me.score += SCORE.hit;
+            p.view && p.view.fire('hit');
+            p.hpShown = Math.max(0, p.hpShown - b.dmg);
+          }
         }
         break;
       }
@@ -504,58 +776,78 @@ function updateBullets(dt) {
   }
 }
 
-// Two planes touching: both go down. Each player checks their own plane against the others (as
-// drawn on their screen) and goes down at once; the other is told too, in case their screen had
-// the two a little apart. Nobody scores for a collision.
+// the planes a bullet can touch: everyone alive except whoever fired it
+function* planesForHits(owner) {
+  if (owner !== me.id && !me.dead && phase === 'play') yield me;
+  for (const r of remotes.values()) {
+    if (r.id !== owner && r.seen && !r.dead) yield r;
+  }
+}
+
+// Where the path a -> b first enters plane p's outline (an ellipse turned with it), or null.
+function touches(ax, ay, bx, by, p) {
+  const [hw, hl] = HIT;
+  const c = Math.cos(p.heading), s = Math.sin(p.heading);
+  for (let k = 1; k <= 4; k++) {
+    const x = ax + ((bx - ax) * k) / 4;
+    const y = ay + ((by - ay) * k) / 4;
+    const dx = x - p.x, dy = y - p.y;
+    const lx = dx * c + dy * s;
+    const ly = -dx * s + dy * c;
+    if ((lx * lx) / (hw * hw) + (ly * ly) / (hl * hl) <= 1) return [x, y];
+  }
+  return null;
+}
+
+// Two planes touching: both go down (a shield takes it instead). Each player checks their own
+// plane and tells the other too, so both screens agree.
 function checkCollisions() {
-  if (phase !== 'play' || me.dead || me.shield > 0) return;
+  if (phase !== 'play' || me.dead || me.spawnShield > 0) return;
   for (const r of remotes.values()) {
     if (!r.seen || r.dead || r.shielded) continue;
     if (!planesTouch(me, r)) continue;
-    crashInto(r.id, r.name);
     net && net.hit(r.id, 0, true);
     r.view && r.view.fire('hit');
+    crashInto(r.id, r.name);
     break;
   }
 }
 
-// The two outlines overlap: test points around each plane's outline against the other's.
 function planesTouch(a, b) {
   if (Math.hypot(a.x - b.x, a.y - b.y) > 110) return false;
   return outlineInside(a, b) || outlineInside(b, a);
 }
 
 function outlineInside(a, b) {
-  const [hw, hl] = PLANES[a.plane].hit;
+  const [hw, hl] = HIT;
   const c = Math.cos(a.heading), s = Math.sin(a.heading);
-  const [bw, bl] = PLANES[b.plane].hit;
   const bc = Math.cos(b.heading), bs = Math.sin(b.heading);
   for (let i = 0; i < 12; i++) {
     const t = (i / 12) * Math.PI * 2;
-    // a point on a's outline (slightly inside, so grazing wingtips do not count)
     const lx = Math.cos(t) * hw * 0.85, ly = Math.sin(t) * hl * 0.85;
     const x = a.x + lx * c - ly * s, y = a.y + lx * s + ly * c;
     const dx = x - b.x, dy = y - b.y;
     const bx = dx * bc + dy * bs, by = -dx * bs + dy * bc;
-    if ((bx * bx) / (bw * bw) + (by * by) / (bl * bl) <= 0.85 * 0.85) return true;
+    if ((bx * bx) / (hw * hw) + (by * by) / (hl * hl) <= 0.85 * 0.85) return true;
   }
   return false;
 }
 
-// My plane goes down in a collision with player `id`.
 function crashInto(id, name) {
   if (me.dead) return;
-  me.hp = 0;
-  me.dead = true;
-  me.burning = true;
-  me.deadT = 0;
+  if (me.shieldHits > 0) {
+    // the shield takes the ram (one block), as in the solo game
+    me.shieldHits -= 1;
+    me.shieldFlash = 1;
+    if (me.shieldHits <= 0) dropAbility('shield');
+    me.spawnShield = 0.6; // (a moment to pull apart)
+    return;
+  }
   me.view && me.view.fire('hit');
-  net && net.kill(id, name, me.name, true);
-  showBanner(`COLLISION<small>WITH ${esc(name)}</small>`, RESPAWN);
-  net && net.send(myState());
+  goDown('crash', id, name);
 }
 
-// Puffs from every plane that is burning, or going down (for the first moments of its fall).
+// --- smoke ------------------------------------------------------------------------------------
 function updateSmoke(dt) {
   const emitters = [];
   if (phase === 'play') emitters.push(me);
@@ -565,18 +857,19 @@ function updateSmoke(dt) {
     if (!(p.burning && !p.dead) && !falling) { p.smokeT = 0; continue; }
     p.smokeT = (p.smokeT || 0) - dt;
     while (p.smokeT <= 0) {
-      p.smokeT += (SMOKE.every / Q().smoke) * (falling ? 1.6 : 1); // a falling plane hardly moves: fewer puffs
-      const spots = FIRE[p.plane] || FIRE[1];
-      const [fx, fy] = spots[Math.floor(Math.random() * spots.length)];
+      p.smokeT += (SMOKE.every / Q().smoke) * (falling ? 1.6 : 1);
+      const [fx, fy] = FIRE[Math.floor(Math.random() * FIRE.length)];
       const c = Math.cos(p.heading), sn = Math.sin(p.heading);
       smoke.push({
         x: p.x + fx * c - fy * sn + rand(-2, 2),
         y: p.y + fx * sn + fy * c + rand(-2, 2),
-        vx: rand(-6, 6), vy: rand(-6, 6), // a slow drift; the puff stays where it was left
+        vx: rand(-6, 6), vy: rand(-6, 6),
         t: 0,
         life: rand(SMOKE.life[0], SMOKE.life[1]) * (falling ? 0.8 : 1),
+        r0: SMOKE.r0,
         r1: rand(SMOKE.r1[0], SMOKE.r1[1]) * (falling ? 1.4 : 1),
         a: SMOKE.alpha * (falling ? 0.8 : 1),
+        light: false,
       });
     }
   }
@@ -591,113 +884,132 @@ function updateSmoke(dt) {
   if (smoke.length > cap) smoke.splice(0, smoke.length - cap);
 }
 
-// "x y radius alpha;..." in World artboard units, for world.riv
+// "x y radius alpha light;..." in World artboard units (screen space: the camera's turn applied)
 function smokeData() {
   const u = view.unit;
   let out = '';
   for (const pf of smoke) {
     const f = pf.t / pf.life;
-    const r = (SMOKE.r0 + (pf.r1 - SMOKE.r0) * Math.sqrt(f)) * view.k;
-    const [x, y] = toScene(pf.x, pf.y);
-    if (x < -r || y < -r || x > view.w + r || y > view.h + r) continue;
+    const r = (pf.r0 + (pf.r1 - pf.r0) * Math.sqrt(f)) * view.k;
+    const [x, y] = toScreen(pf.x, pf.y);
+    if (!onScreen(x, y, r)) continue;
     const a = pf.a * Math.min(1, pf.t / 0.08) * (1 - f) * (1 - f * 0.4);
-    out += `${(x * u).toFixed(1)} ${(y * u).toFixed(1)} ${(r * u).toFixed(1)} ${a.toFixed(3)};`;
+    out += `${(x * u).toFixed(1)} ${(y * u).toFixed(1)} ${(r * u).toFixed(1)} ${a.toFixed(3)} ${pf.light ? 1 : 0};`;
   }
   return out;
 }
 
-// the planes a bullet can touch: everyone alive except whoever fired it
-function* planesForHits(owner) {
-  if (owner !== me.id && !me.dead && phase === 'play') yield me;
-  for (const r of remotes.values()) {
-    if (r.id !== owner && r.seen && !r.dead) yield r;
+// --- the overlay's list (see overlay.luau) ----------------------------------------------------
+function overlayData() {
+  const u = view.unit;
+  const k = view.k;
+  const m = 80 * k;
+  const f1 = (v) => (v * u).toFixed(1);
+  let out = '';
+  for (const bl of bullets) {
+    const [x, y] = toScreen(bl.x, bl.y);
+    if (!onScreen(x, y, m)) continue;
+    const [dx, dy] = dirToScreen(bl.dx, bl.dy);
+    out += `${bl.pod ? 10 : 1} ${f1(x)} ${f1(y)} ${dx.toFixed(3)} ${dy.toFixed(3)} ${f1(bl.muzzle * bl.t * k)};`;
   }
-}
-
-// Where the bullet's path this frame (a -> b) first enters plane p's outline, or null.
-// The outline is an ellipse in the plane's own frame (x across the wings, y along the body).
-function touches(ax, ay, bx, by, p) {
-  const [hw, hl] = PLANES[p.plane].hit;
-  const c = Math.cos(p.heading), s = Math.sin(p.heading);
-  const steps = 4;
-  for (let k = 1; k <= steps; k++) {
-    const x = ax + ((bx - ax) * k) / steps;
-    const y = ay + ((by - ay) * k) / steps;
-    const dx = x - p.x, dy = y - p.y;
-    const lx = dx * c + dy * s; // into the plane's frame (undo its heading)
-    const ly = -dx * s + dy * c;
-    if ((lx * lx) / (hw * hw) + (ly * ly) / (hl * hl) <= 1) return [x, y];
+  for (const sp of sparks) {
+    const [x, y] = toScreen(sp.x, sp.y);
+    out += `4 ${f1(x)} ${f1(y)} 0 0 ${(sp.t / SPARK_LIFE).toFixed(2)};`;
   }
-  return null;
-}
-
-function updateCamera(dt) {
-  const v = me.speed * CAMERA.lead;
-  const tx = me.x + Math.sin(me.heading) * v;
-  const ty = me.y - Math.cos(me.heading) * v;
-  const k = ease(CAMERA.ease, dt);
-  cam.x += (tx - cam.x) * k;
-  cam.y += (ty - cam.y) * k;
-  cam.angle += wrap(me.heading - cam.angle) * ease(CAMERA.turn, dt);
+  for (const ms of missiles) {
+    const [x, y] = toScreen(ms.x, ms.y);
+    if (!onScreen(x, y, m)) continue;
+    const sp = Math.max(1, Math.hypot(ms.vx, ms.vy));
+    const [dx, dy] = dirToScreen(ms.vx / sp, ms.vy / sp);
+    out += `5 ${f1(x)} ${f1(y)} ${dx.toFixed(3)} ${dy.toFixed(3)} ${f1(ms.trav * k)} ${ms.age.toFixed(2)};`;
+  }
+  for (const r of rings) {
+    const [x, y] = toScreen(r.x, r.y);
+    out += `6 ${f1(x)} ${f1(y)} ${(r.t / r.max).toFixed(3)} ${f1(r.r * k)};`;
+  }
+  for (const pk of pickups) {
+    const [x, y] = toScreen(pk.x, pk.y);
+    if (!onScreen(x, y, m)) continue;
+    out += `7 ${pk.id} ${pk.kind} ${f1(x)} ${f1(y)} ${pk.t.toFixed(2)};`;
+  }
+  const [mx, my] = toScreen(me.x, me.y);
+  for (const cl of collects) {
+    const [x, y] = toScreen(cl.x, cl.y);
+    out += `8 ${cl.id} ${cl.kind} ${f1(x)} ${f1(y)} ${cl.t.toFixed(3)} ${f1(mx)} ${f1(my)};`;
+  }
+  // shield bubbles: mine and everyone's who has one up
+  const bubble = (p, hits, flash, alpha) => {
+    if (alpha <= 0.01) return;
+    const [x, y] = toScreen(p.x, p.y);
+    if (!onScreen(x, y, m * 2)) return;
+    const r = 62 * k * (0.85 + 0.15 * alpha) * (1 + 0.06 * flash);
+    out += `9 ${f1(x)} ${f1(y - 4 * k)} ${f1(r)} ${(hits / SHIELD_HITS).toFixed(3)} ${flash.toFixed(3)} ${alpha.toFixed(3)};`;
+  };
+  if (phase === 'play' && !me.dead) bubble(me, me.shieldHits, me.shieldFlash, me.shieldT);
+  for (const r of remotes.values()) if (r.seen && !r.dead) bubble(r, r.shieldHits || 0, 0, r.shieldT || 0);
+  return out;
 }
 
 // --- network --------------------------------------------------------------------------------
 function myState() {
   return {
-    n: me.name, p: me.plane,
+    n: me.name, p: 1, c: me.hue,
     x: Math.round(me.x), y: Math.round(me.y),
     h: +me.heading.toFixed(3), v: Math.round(me.speed),
     b: +me.bank.toFixed(2), q: +me.pitch.toFixed(2),
-    f: me.shots, d: me.dead, u: me.burning, i: me.shield > 0,
-    a: Math.round((100 * me.hp) / PLANES[me.plane].hp),
+    f: me.shots, pf: me.podShots, po: me.podAmmo > 0 ? 1 : 0,
+    rk: me.rockets, rt: me.rocketTarget || '',
+    sh: me.shieldHits,
+    d: me.dead, u: me.burning, i: me.spawnShield > 0,
+    a: Math.round(me.hp),
     s: me.score,
   };
 }
 
 function onPlayers(all) {
-  const now = performance.now();
   for (const [id, st] of Object.entries(all)) {
     if (!st || typeof st.x !== 'number') continue;
     let r = remotes.get(id);
     if (!r) {
       r = makeRemote(id, st);
       remotes.set(id, r);
-      // (the players already there when I join are not news)
       if (performance.now() - joinedAt > 2000) addFeed(`<b>${esc(cleanName(st.n))}</b> joined`);
     }
     const wasDead = r.dead;
     if (!wasDead && st.d) r.deadAt = performance.now();
     r.net = st;
-    r.netT = now;
     r.name = cleanName(st.n) || 'PILOT';
-    r.plane = PLANES[st.p] ? st.p : 1;
+    r.hue = typeof st.c === 'number' ? st.c : 0;
     r.dead = !!st.d;
     r.burning = !!st.u;
     r.shielded = !!st.i;
     r.score = st.s || 0;
     r.hpShown = st.a ?? 100;
+    r.shieldHits = st.sh || 0;
+    r.podsOut = !!st.po;
     if (!r.seen || (wasDead && !r.dead)) {
-      // first sight, or back from the dead: put it straight where it is
       r.x = st.x; r.y = st.y; r.heading = st.h || 0;
       r.shots = st.f || 0;
+      r.podShots = st.pf || 0;
+      r.rockets = st.rk || 0;
       r.seen = true;
       r.buf = [];
     }
     remember(r, st);
-    // guns fired since the last update: replay them from where the plane is now
+    // what they fired since the last update: replayed from where their plane is now
     const fired = Math.min(4, (st.f || 0) - r.shots);
     for (let i = 0; i < fired; i++) {
       const n = r.shots + i;
-      if (PLANES[r.plane].pattern === 'pairs') {
-        shoot(r, n % 2, false);
-        if (n % 2 === 0) r.view && r.view.fire('fire');
-      } else {
-        shoot(r, 0, false);
-        shoot(r, 1, false);
-        r.view && r.view.fire('fire');
-      }
+      shoot(r, n % 2, false);
+      if (n % 2 === 0) r.view && r.view.fire('fire');
     }
     r.shots = Math.max(r.shots, st.f || 0);
+    const pods = Math.min(3, (st.pf || 0) - r.podShots);
+    for (let i = 0; i < pods; i++) podVolley(r, false);
+    r.podShots = Math.max(r.podShots, st.pf || 0);
+    const rk = Math.min(3, (st.rk || 0) - r.rockets);
+    for (let i = 0; i < rk; i++) launch(r, st.rt, false);
+    r.rockets = Math.max(r.rockets, st.rk || 0);
   }
   for (const [id, r] of remotes) {
     if (!(id in all)) {
@@ -719,13 +1031,13 @@ function makeRemote(id, st) {
   arrow.className = 'arrow-off';
   arrow.style.display = 'none';
   tagsLayer.appendChild(arrow);
-  const r = {
-    id, name: '', plane: st.p || 1, x: st.x, y: st.y, heading: st.h || 0, speed: st.v || 0,
+  return {
+    id, name: '', hue: 0, x: st.x, y: st.y, heading: st.h || 0, speed: st.v || 0,
     bank: 0, pitch: 0, dead: false, burning: false, shielded: false, score: 0, hpShown: 100,
-    shots: st.f || 0, seen: false, net: st, netT: performance.now(), view: null, loading: false,
-    tag, arrow, nameShown: '',
+    shots: st.f || 0, podShots: st.pf || 0, rockets: st.rk || 0, rktSide: 1,
+    podScale: 0, podT: 0, podsOut: false, shieldHits: 0, shieldT: 0,
+    seen: false, net: st, view: null, loading: false, tag, arrow, nameShown: '',
   };
-  return r;
 }
 
 // Only the planes near the camera get a Rive instance; far ones are just data (any number can play).
@@ -754,12 +1066,15 @@ function cullViews() {
 }
 
 // Other planes are shown a moment in the past (INTERP), moving between the positions they sent,
-// so they glide smoothly however unevenly the updates arrive. Past the newest update they keep
-// flying straight on for a moment.
+// so they glide smoothly however unevenly the updates arrive.
 const INTERP = 0.12; // s
 function updateRemotes(dt) {
   const nowWall = Date.now();
   for (const r of remotes.values()) {
+    // their pods and shield ease in and out here too
+    r.podT = r.podsOut ? Math.min(1, r.podT + dt * 3) : Math.max(0, r.podT - dt * 4);
+    r.podScale = r.podsOut ? backOut(r.podT) : r.podT * r.podT;
+    r.shieldT = r.shieldHits > 0 ? Math.min(1, r.shieldT + dt * 4) : Math.max(0, r.shieldT - dt * 4);
     const buf = r.buf;
     if (!buf || !buf.length) continue;
     const t = nowWall - r.lag - INTERP * 1000;
@@ -769,20 +1084,18 @@ function updateRemotes(dt) {
     }
     let x, y, h, bank, pitch;
     if (b) {
-      const f = Math.max(0, Math.min(1, (t - a.t) / Math.max(1, b.t - a.t)));
+      const f = clamp((t - a.t) / Math.max(1, b.t - a.t), 0, 1);
       x = a.x + (b.x - a.x) * f;
       y = a.y + (b.y - a.y) * f;
       h = a.h + wrap(b.h - a.h) * f;
       bank = a.b + (b.b - a.b) * f;
       pitch = a.q + (b.q - a.q) * f;
     } else {
-      // nothing newer yet: keep flying from the newest one (at most a quarter second)
-      const ahead = Math.max(0, Math.min(0.25, (t - a.t) / 1000));
+      const ahead = clamp((t - a.t) / 1000, 0, 0.25);
       x = a.x + Math.sin(a.h) * a.v * ahead;
       y = a.y - Math.cos(a.h) * a.v * ahead;
       h = a.h; bank = a.b; pitch = a.q;
     }
-    // a light final smoothing hides the switch between the two ways above
     const k = ease(25, dt);
     if (Math.hypot(x - r.x, y - r.y) > 300) { r.x = x; r.y = y; }
     r.x += (x - r.x) * k;
@@ -794,11 +1107,9 @@ function updateRemotes(dt) {
   }
 }
 
-// keep a short history of each player's updates, timed by their own clock
 function remember(r, st) {
   const now = Date.now();
   const t = typeof st.t === 'number' ? st.t : now;
-  // the clock difference + delivery delay: the smallest seen lately (it may creep up slowly)
   const d = now - t;
   r.lag = r.lag == null ? d : Math.min(d, r.lag + 5);
   if (!r.buf) r.buf = [];
@@ -809,31 +1120,33 @@ function remember(r, st) {
 }
 
 function onHit({ by, dmg, crash }) {
-  if (phase !== 'play' || me.dead || me.shield > 0) return;
+  if (phase !== 'play' || me.dead || me.spawnShield > 0) return;
+  const killer = remotes.get(by);
   if (crash) {
-    const r = remotes.get(by);
-    crashInto(by, r ? r.name : 'PILOT');
+    crashInto(by, killer ? killer.name : 'PILOT');
+    return;
+  }
+  // the shield takes the hit instead: one block used, a flash, no damage (game.luau damagePlayer)
+  if (me.shieldHits > 0) {
+    me.shieldHits -= 1;
+    me.shieldFlash = 1;
+    if (me.shieldHits <= 0) dropAbility('shield');
     return;
   }
   me.hp = Math.max(0, me.hp - (+dmg || 0));
-  me.lastBy = by;
   me.view && me.view.fire('hit');
-  if (me.hp <= PLANES[me.plane].hp * 0.35) me.burning = true;
-  if (me.hp <= 0) {
-    me.dead = true;
-    me.burning = true;
-    me.deadT = 0;
-    const killer = remotes.get(by);
-    net.kill(by, killer ? killer.name : 'PILOT', me.name);
-    showBanner(`SHOT DOWN<small>BY ${esc(killer ? killer.name : 'PILOT')}</small>`, RESPAWN);
-    net.send(myState());
-  }
+  if (me.hp <= 0) goDown('shot', by, killer ? killer.name : 'PILOT');
 }
 
 const crashSeen = new Map(); // pair -> time, so a collision is announced once
 function onKill(k) {
   if (!session) return;
-  if (k.crash) {
+  const cause = k.cause || (k.crash ? 'crash' : 'shot');
+  if (cause === 'oil') {
+    addFeed(`<b>${esc(cleanName(k.toName))}</b> ran out of oil`);
+    return;
+  }
+  if (cause === 'crash') {
     const pair = [k.by, k.to].sort().join('|');
     const now = performance.now();
     if (now - (crashSeen.get(pair) || -1e9) < 4000) return;
@@ -848,13 +1161,12 @@ function onKill(k) {
   addFeed(`<b>${esc(cleanName(k.byName))}</b> shot down ${esc(cleanName(k.toName))}`);
 }
 
-// --- HUD ------------------------------------------------------------------------------------
+// --- HUD (the scoreboard; the bar itself is drawn by the overlay) -------------------------------
 let boardT = 0;
-function updateHud(dt) {
-  $('#hpFill').style.width = `${(100 * me.hp) / PLANES[me.plane].hp}%`;
-  $('#myScore').textContent = me.score;
+function updateBoard(dt) {
   bannerT -= dt;
   if (bannerT <= 0) banner.classList.remove('show');
+  $('#rocketBtn').classList.toggle('on', me.rktAmmo > 0 && !me.dead);
   boardT -= dt;
   if (boardT > 0) return;
   boardT = 0.25;
@@ -863,7 +1175,6 @@ function updateHud(dt) {
   rows.sort((a, b) => b.score - a.score || (a.me ? -1 : 1));
   rows.forEach((r, i) => { r.rank = i + 1; });
   $('#boardCount').textContent = `${rows.length} ONLINE`;
-  // the top ones, and me below them if I am further down
   const shown = rows.slice(0, BOARD_ROWS);
   const mine = rows.find((r) => r.me);
   if (mine.rank > BOARD_ROWS) shown.push(mine);
@@ -877,9 +1188,8 @@ function updateTags() {
   const m = 26;
   for (const r of remotes.values()) {
     if (!r.seen) { r.tag.style.display = 'none'; r.arrow.style.display = 'none'; continue; }
-    const [sx, sy] = toScene(r.x, r.y);
-    const [x, y] = sceneToScreen(sx, sy);
-    const on = x > -40 && y > -40 && x < view.sw + 40 && y < view.sh + 40;
+    const [x, y] = toScreen(r.x, r.y);
+    const on = onScreen(x, y, 40);
     if (on) {
       r.tag.style.display = '';
       r.arrow.style.display = 'none';
@@ -898,68 +1208,58 @@ function updateTags() {
   }
 }
 
-// --- bullets -> world.riv "Shots" ------------------------------------------------------------
-function shotsData() {
-  const u = view.unit;
-  const m = 80 * view.k;
-  let out = '';
-  for (const bl of bullets) {
-    const [x, y] = toScene(bl.x, bl.y);
-    if (x < -m || y < -m || x > view.w + m || y > view.h + m) continue;
-    out += `${bl.plane} ${(x * u).toFixed(1)} ${(y * u).toFixed(1)} ${bl.dx.toFixed(3)} ${bl.dy.toFixed(3)} ${(bl.muzzle * bl.t * view.k * u).toFixed(1)};`;
-  }
-  // impact sparks: kind 4, the last number is how far through its life (0..1)
-  for (const sp of sparks) {
-    const [x, y] = toScene(sp.x, sp.y);
-    out += `4 ${(x * u).toFixed(1)} ${(y * u).toFixed(1)} 0 0 ${(sp.t / SPARK_LIFE).toFixed(2)};`;
-  }
-  return out;
+function updateCamera(dt) {
+  const v = me.speed * CAMERA.lead;
+  const tx = me.x + Math.sin(me.heading) * v;
+  const ty = me.y - Math.cos(me.heading) * v;
+  const k = ease(CAMERA.ease, dt);
+  cam.x += (tx - cam.x) * k;
+  cam.y += (ty - cam.y) * k;
+  cam.angle += wrap(me.heading - cam.angle) * ease(CAMERA.turn, dt);
 }
 
-// --- world binding --------------------------------------------------------------------------
+// --- Rive bindings ------------------------------------------------------------------------------
 let world = null;
 let wvm = null;
 let shots = null;
 let svm = null;
 const wNum = {};
+const sNum = {};
 let wSmoke = null;
+let sData = null;
 function setWorld(name, v) {
   if (!wvm) return;
   const p = wNum[name] || (wNum[name] = wvm.number(name));
   if (p) p.value = v;
 }
+function setShots(name, v) {
+  if (!svm) return;
+  const p = sNum[name] || (sNum[name] = svm.number(name));
+  if (p && p.value !== v) p.value = v;
+}
 
 function measure() {
-  // the scene is a square as big as the screen's diagonal, so turning it never shows a corner
-  const sw = innerWidth, sh = innerHeight;
-  const D = Math.ceil(Math.hypot(sw, sh));
-  view.sw = sw; view.sh = sh;
-  view.w = view.h = D;
-  scene.style.width = scene.style.height = D + 'px';
-  scene.style.left = (sw - D) / 2 + 'px';
-  scene.style.top = (sh - D) / 2 + 'px';
+  view.sw = innerWidth;
+  view.sh = innerHeight;
   if (world) {
     world.resizeDrawingSurfaceToCanvas(worldDpr());
     const aw = world.artboardWidth;
-    view.unit = aw > 0 ? aw / view.w : 1;
+    view.unit = aw > 0 ? aw / view.sw : 1;
   }
-  // the game's screen scale (GFX.scaleFor) x the camera zoom
   const mobile = matchMedia('(pointer: coarse)').matches;
-  const gameK = Math.min(3.2, Math.max(mobile ? 1.2 : 0.72, Math.min(sw, sh) / 400));
+  const gameK = Math.min(3.2, Math.max(mobile ? 1.2 : 0.72, Math.min(view.sw, view.sh) / 400));
   view.k = gameK * CAMERA.zoom;
-  if (shots) shots.resizeDrawingSurfaceToCanvas(worldDpr());
+  if (shots) shots.resizeDrawingSurfaceToCanvas(Math.min(devicePixelRatio || 1, 1.5) * Q().world);
   me.view && me.view.resize(view.k);
   for (const r of remotes.values()) r.view && r.view.resize(view.k);
-  if (menuPlane) {
-    const c = $('#menuPlane');
-    menuPlane.setSize(Math.round(c.clientWidth || 300));
-  }
+  if (menuPlane) menuPlane.setSize(Math.round($('#menuPlane').clientWidth || 300));
+  bendMenu();
 }
 addEventListener('resize', measure);
 
-// --- menu ------------------------------------------------------------------------------------
+// --- menu -------------------------------------------------------------------------------------
 let menuPlane = null;
-let menuSel = 2; // the selected row: 0 name, 1 plane, 2 join
+let menuSel = 1; // the selected row: 0 name, 1 join
 let menuT = 0;
 let menuFireT = 1;
 const rowsEl = [...document.querySelectorAll('.row')];
@@ -970,21 +1270,51 @@ $('.rows').appendChild(chevron);
 
 function selectRow(i) {
   menuSel = (i + rowsEl.length) % rowsEl.length;
-  rowsEl.forEach((r, k) => r.classList.toggle('sel', k === menuSel));
+  rowsEl.forEach((r, n) => r.classList.toggle('sel', n === menuSel));
   chevron.style.transform = `translateY(${rowsEl[menuSel].offsetTop}px)`;
   if (menuSel === 0) nameInput.focus();
   else if (document.activeElement === nameInput) nameInput.blur();
 }
 
-function setMenuPlane(n) {
-  me.plane = ((n - 1 + 3) % 3) + 1;
-  const spec = PLANES[me.plane];
-  $('#planeName').textContent = spec.name;
-  const fire = spec.dmg * (spec.pattern === 'pairs' ? 2 / 0.29 : 2 / spec.gap) / 2;
-  const meter = (label, v) => `<span>${label}</span><span class="meter"><i style="width:${Math.round(Math.min(1, v) * 100)}%"></i></span>`;
-  $('#planeStats').innerHTML = meter('SPEED', spec.speed / STAT_MAX.speed) + meter('ARMOR', spec.hp / STAT_MAX.hp) +
-    meter('FIREPOWER', fire / STAT_MAX.fire);
-  try { localStorage.setItem('skyblitz.plane', String(me.plane)); } catch {}
+// The menu bends like the solo game's (GFX.menuBend): each column stretched up and down about the
+// middle by 1 + 0.34 (1 - u)^2, u across the menu - its left end the tallest. An SVG displacement
+// map does the stretch, so the menu stays real, clickable HTML.
+function bendMenu() {
+  const panel = $('.menu-panel');
+  const img = $('#bendMap');
+  const fe = $('#bendFilter');
+  if (!panel || !img || !fe) return;
+  if (matchMedia('(max-width: 760px)').matches) { panel.style.filter = 'none'; return; }
+  const w = panel.offsetWidth, h = panel.offsetHeight;
+  if (!w || !h) return;
+  const CURVE = 0.34;
+  const top = -h * 0.25, H = h * 1.5; // the region: room for the taller left end
+  const scale = h * 0.5;
+  const cw = Math.max(2, Math.round(w / 2)), ch = Math.max(2, Math.round(H / 2));
+  const cv = document.createElement('canvas');
+  cv.width = cw; cv.height = ch;
+  const g = cv.getContext('2d');
+  const data = g.createImageData(cw, ch);
+  const yc = h / 2;
+  for (let i = 0; i < cw; i++) {
+    const u = i / (cw - 1);
+    const s = 1 + CURVE * (1 - u) * (1 - u);
+    for (let j = 0; j < ch; j++) {
+      const y = top + (j / (ch - 1)) * H; // element y
+      const dy = (y - yc) * (1 / s - 1); // sample from here
+      const o = (j * cw + i) * 4;
+      data.data[o] = 128;
+      data.data[o + 1] = clamp(Math.round(128 + (dy / scale) * 255), 0, 255);
+      data.data[o + 2] = 128;
+      data.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(data, 0, 0);
+  fe.setAttribute('x', 0); fe.setAttribute('y', top); fe.setAttribute('width', w); fe.setAttribute('height', H);
+  img.setAttribute('href', cv.toDataURL());
+  img.setAttribute('x', 0); img.setAttribute('y', top); img.setAttribute('width', w); img.setAttribute('height', H);
+  $('#bendMapDisp').setAttribute('scale', scale);
+  panel.style.filter = 'url(#bendFilter)';
 }
 
 rowsEl.forEach((r, i) => r.addEventListener('pointerenter', () => { if (phase === 'menu') selectRow(i); }));
@@ -994,8 +1324,6 @@ nameInput.addEventListener('input', () => {
   if (v !== nameInput.value) nameInput.value = v;
   setStatus('');
 });
-$('#prevPlane').addEventListener('click', (e) => { e.stopPropagation(); setMenuPlane(me.plane - 1); });
-$('#nextPlane').addEventListener('click', (e) => { e.stopPropagation(); setMenuPlane(me.plane + 1); });
 joinBtn.addEventListener('click', () => joinGame());
 
 addEventListener('keydown', (e) => {
@@ -1004,8 +1332,6 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Enter') { e.preventDefault(); joinGame(); return; }
   if (e.code === 'ArrowDown' || (!typing && e.code === 'KeyS')) { e.preventDefault(); selectRow(menuSel + 1); }
   else if (e.code === 'ArrowUp' || (!typing && e.code === 'KeyW')) { e.preventDefault(); selectRow(menuSel - 1); }
-  else if (!typing && (e.code === 'ArrowLeft' || e.code === 'KeyA')) setMenuPlane(me.plane - 1);
-  else if (!typing && (e.code === 'ArrowRight' || e.code === 'KeyD')) setMenuPlane(me.plane + 1);
 });
 
 function setStatus(text, err = false) {
@@ -1031,7 +1357,7 @@ async function joinGame() {
     net.onHit = onHit;
     net.onKill = onKill;
     me.name = name;
-    session = await net.join({ name, plane: me.plane });
+    session = await net.join({ name, plane: 1 });
   } catch (e) {
     console.error('join failed', e);
     setStatus('COULD NOT JOIN: ' + (e && e.message ? e.message : e), true);
@@ -1042,12 +1368,12 @@ async function joinGame() {
   joinBtn.disabled = false;
   setStatus('');
   me.score = 0;
-  me.shots = 0;
+  me.shots = me.podShots = me.rockets = 0;
   me.gunT = 0;
   bullets.length = 0;
+  missiles.length = 0;
   spawn(me);
   cam.x = me.x; cam.y = me.y; cam.angle = me.heading;
-  $('#roomLabel').textContent = `SKY ARENA · ${session.label}`;
   phase = 'play';
   joinedAt = performance.now();
   stage.dataset.phase = 'play';
@@ -1069,16 +1395,19 @@ async function leaveGame() {
   bullets.length = 0;
   sparks.length = 0;
   smoke.length = 0;
+  missiles.length = 0;
+  rings.length = 0;
+  pickups.length = 0;
+  collects.length = 0;
   feed.innerHTML = '';
   banner.classList.remove('show');
-  selectRow(2);
+  selectRow(1);
 }
 
 // --- quality monitor ---------------------------------------------------------------------------
-// Two seconds with most frames slower than ~22 ms (under ~45 fps): one step down.
 const perf = { n: 0, slow: 0 };
 function watchFrames(dtMs) {
-  if (document.hidden || dtMs > 250) return; // a background tab or a hitch is not a slow computer
+  if (document.hidden || dtMs > 250) return;
   perf.n += 1;
   if (dtMs > 22) perf.slow += 1;
   if (perf.n < 120) return;
@@ -1088,22 +1417,19 @@ function watchFrames(dtMs) {
     qLevel -= 1;
     try { localStorage.setItem('skyblitz.quality', String(qLevel)); } catch {}
     console.info('quality ->', ['low', 'medium', 'high'][qLevel]);
-    applyQuality();
+    setWorld('quality', Q().detail);
+    measure();
   }
-}
-
-function applyQuality() {
-  setWorld('quality', Q().detail);
-  measure();
 }
 
 // --- main loop ------------------------------------------------------------------------------
 let lastT = 0;
+let lastOverlay = '';
+let lastSmoke = '';
 function frame(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0);
   if (lastT) watchFrames(t - lastT);
   lastT = t;
-  // only the planes on show draw: my plane in the game, the big one in the menu
   menuPlane && menuPlane.active(phase !== 'play');
   me.view && me.view.active(phase === 'play');
 
@@ -1113,6 +1439,8 @@ function frame(t) {
     updateRemotes(dt);
     cullViews();
     checkCollisions();
+    updatePickups(dt);
+    updateMissiles(dt);
     updateBullets(dt);
     updateCamera(dt);
     sendT -= dt;
@@ -1120,7 +1448,7 @@ function frame(t) {
       sendT = 1 / SEND_HZ;
       net.send(myState());
     }
-    updateHud(dt);
+    updateBoard(dt);
   } else {
     // the menu: the camera drifts over the sea; the showcase plane sways and fires now and then
     menuT += dt;
@@ -1128,54 +1456,78 @@ function frame(t) {
     cam.y -= 40 * dt;
     cam.angle += wrap(0 - cam.angle) * ease(1, dt);
     updateBullets(dt);
+    updateMissiles(dt);
     if (menuPlane) {
-      menuPlane.num('plane', me.plane);
       menuPlane.num('bank', +(Math.sin(menuT * 0.7) * 0.45).toFixed(3));
       menuPlane.num('pitch', 0);
       menuPlane.bool('burning', false);
       menuPlane.bool('dead', false);
+      menuPlane.colors(0);
       menuFireT -= dt;
       if (menuFireT <= 0) { menuFireT = rand(1.4, 2.6); menuPlane.fire('fire'); }
     }
   }
+  updateSmoke(dt);
 
-  // planes -> their Rive instances
+  // planes -> their Rive instances (screen space: turned by the camera)
   if (me.view) {
-    const [sx, sy] = toScene(me.x, me.y);
-    me.view.place(sx, sy, me.heading);
+    const [sx, sy] = toScreen(me.x, me.y);
+    me.view.place(sx, sy, me.heading - cam.angle);
     me.view.pose(me);
-    me.view.canvas.classList.toggle('blink', me.shield > 0 && !me.dead);
+    me.view.canvas.classList.toggle('blink', me.spawnShield > 0 && !me.dead);
+    me.view.canvas.classList.toggle('top', performance.now() < introUntil);
   }
   for (const r of remotes.values()) {
     if (!r.view) continue;
-    const [sx, sy] = toScene(r.x, r.y);
-    r.view.place(sx, sy, r.heading);
+    const [sx, sy] = toScreen(r.x, r.y);
+    r.view.place(sx, sy, r.heading - cam.angle);
     r.view.pose(r);
     r.view.canvas.classList.toggle('blink', r.shielded && !r.dead);
   }
 
-  // world follows the camera; the wake follows my plane
-  const [px, py] = toScene(me.x, me.y);
+  // the world: the sea and clouds slide with the camera and turn with it (in the shaders)
+  const [wx, wy] = toWorldFrame(me.x, me.y);
   setWorld('camX', cam.x * view.k * view.unit);
   setWorld('camY', cam.y * view.k * view.unit);
-  setWorld('planeX', px * view.unit);
-  setWorld('planeY', py * view.unit);
-  setWorld('heading', me.heading);
+  setWorld('planeX', wx * view.unit);
+  setWorld('planeY', wy * view.unit);
+  setWorld('angle', cam.angle);
   setWorld('planeOn', phase === 'play' && !me.dead ? 1 : 0);
   setWorld('k', view.k * view.unit);
-  updateSmoke(dt);
   if (wvm) {
-    const sm = wSmoke || (wSmoke = wvm.string('smoke'));
-    if (sm) sm.value = smokeData();
+    const sm = smokeData();
+    if (sm !== lastSmoke) {
+      const p = wSmoke || (wSmoke = wvm.string('smoke'));
+      if (p) p.value = sm;
+      lastSmoke = sm;
+    }
   }
-
-  scene.style.transform = `rotate(${-cam.angle}rad)`;
   if (phase === 'play') updateTags();
+
+  // the overlay: everything over the planes, and the HUD
   if (svm) {
-    const d = svm.string('data');
-    if (d) d.value = shotsData();
-    const kk = svm.number('k');
-    if (kk) kk.value = view.k * view.unit;
+    const d = overlayData();
+    if (d !== lastOverlay) {
+      const p = sData || (sData = svm.string('data'));
+      if (p) p.value = d;
+      lastOverlay = d;
+    }
+    const u = view.unit;
+    const [mx, my] = toScreen(me.x, me.y);
+    setShots('k', view.k * u);
+    setShots('hud', phase === 'play' ? 1 : 0);
+    setShots('hp', Math.round(me.hp));
+    setShots('score', me.score);
+    setShots('oil', Math.round(me.oil * 10) / 10);
+    setShots('meX', Math.round(mx * u));
+    setShots('meY', Math.round(my * u));
+    setShots('podAmmo', phase === 'play' ? me.podAmmo : 0);
+    setShots('rktAmmo', phase === 'play' ? me.rktAmmo : 0);
+    setShots('shieldHits', phase === 'play' ? me.shieldHits : 0);
+    setShots('introKind', introKind);
+    setShots('introSeq', introSeq);
+    setShots('ax', +(me.bank * 0.7).toFixed(2));
+    setShots('ay', +(-me.pitch * 0.5).toFixed(2));
   }
   requestAnimationFrame(frame);
 }
@@ -1185,10 +1537,7 @@ async function boot() {
   try {
     nameInput.value = cleanName(localStorage.getItem('skyblitz.name') || '');
   } catch {}
-  let savedPlane = 1;
-  try { savedPlane = +localStorage.getItem('skyblitz.plane') || 1; } catch {}
-  setMenuPlane(savedPlane);
-  selectRow(nameInput.value ? 2 : 0);
+  selectRow(nameInput.value ? 1 : 0);
   try {
     const [w, s, mine, showcase] = await Promise.all([
       loadRive({
@@ -1202,6 +1551,7 @@ async function boot() {
         src: `riv/world.riv?v=${V}`,
         canvas: shotsCanvas,
         artboard: 'Shots',
+        enableGPUCanvas: true, // the overlay's GPU liquids and shield bubble
         layout: new R.Layout({ fit: R.Fit.Layout }),
       }),
       new PlaneView($('#me')).load(),
@@ -1219,7 +1569,6 @@ async function boot() {
     selectRow(menuSel);
     $('#loading').classList.add('done');
     requestAnimationFrame(frame);
-    // connect early (Firebase loads in the background) so joining is quick
     createNet().then((n) => {
       net = net || n;
       if (net.mode === 'local') setStatus('OFFLINE TEST MODE · OPEN MORE WINDOWS TO PLAY TOGETHER');
@@ -1233,5 +1582,11 @@ boot();
 
 // ?debug exposes the game state to the console (and to automated tests)
 if (new URLSearchParams(location.search).has('debug')) {
-  window.__sky = { me, remotes, cam, bullets, view, get phase() { return phase; }, get session() { return session; }, get net() { return net; }, get quality() { return qLevel; }, setQuality(q) { qLevel = q; applyQuality(); } };
+  window.__sky = {
+    me, remotes, cam, bullets, missiles, pickups, view,
+    get phase() { return phase; }, get session() { return session; }, get net() { return net; },
+    get quality() { return qLevel; },
+    give(kind) { takePickup({ id: pickupId++, kind: KIND[kind], x: me.x, y: me.y, t: 0 }); },
+    fireRocket,
+  };
 }

@@ -8,7 +8,7 @@
   <link rel="icon" href="data:," />
   <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
        browsers load the new files at once instead of a cached copy -->
-  <link rel="stylesheet" href="css/style.css?v=7" />
+  <link rel="stylesheet" href="css/style.css?v=8" />
   <script>
     // Static hosting cannot send the cross-origin isolation headers Rive needs for its threads;
     // coi-sw.js adds them. The first visit installs it and reloads once (never in a loop).
@@ -25,29 +25,24 @@
 </head>
 <body>
   <main id="stage" data-phase="menu">
-    <!-- the scene: a square as big as the screen's diagonal, turned as one piece by the camera -->
+    <!-- the game, at screen size (the camera's turn is drawn by the Rive files themselves) -->
     <div id="scene">
-      <!-- world.riv: ocean + clouds (the plane's wake cuts the near clouds) -->
+      <!-- world.riv "World": ocean, clouds and smoke trails -->
       <canvas id="world"></canvas>
       <!-- planes.riv: one canvas per plane (mine + the players near me) -->
       <div id="planes">
         <canvas class="plane" id="me"></canvas>
       </div>
-      <!-- world.riv "Shots": the bullets, drawn over the planes exactly as in the game -->
+      <!-- world.riv "Shots": tracers, rockets, power-ups, shields, weapon panels and the HUD bar,
+           drawn by the solo game's own code (overlay.luau) -->
       <canvas id="shots"></canvas>
     </div>
 
-    <!-- upright overlays that follow the planes: name tags, arrows to players off screen -->
+    <!-- name tags over the other planes, arrows to players off screen -->
     <div id="tags" aria-hidden="true"></div>
 
-    <!-- in-game HUD -->
+    <!-- the scoreboard, top right (the HUD bar along the bottom is drawn by Rive) -->
     <header id="hud">
-      <div class="hud-left">
-        <div class="brand"><span class="kicker">SKY</span> BLITZ</div>
-        <div class="room" id="roomLabel">SKY ARENA</div>
-        <div class="hp" aria-label="Health"><div class="hp-fill" id="hpFill"></div></div>
-        <div class="myscore">SCORE <b id="myScore">0</b></div>
-      </div>
       <aside class="board" aria-label="Leaderboard">
         <div class="board-head"><span>PILOTS</span><span id="boardCount">1 ONLINE</span></div>
         <ol id="boardList"></ol>
@@ -56,15 +51,16 @@
     <div id="feed" aria-live="polite"></div>
     <div id="banner" aria-live="assertive"></div>
     <div id="help">
-      <b>A / D</b> turn &nbsp;·&nbsp; <b>W / S</b> throttle &nbsp;·&nbsp; <b>Space</b> or mouse fire &nbsp;·&nbsp; <b>Esc</b> menu
+      <b>A / D</b> turn &nbsp;·&nbsp; <b>W / S</b> throttle &nbsp;·&nbsp; <b>Space</b> fire &nbsp;·&nbsp; <b>Q</b> rocket &nbsp;·&nbsp; <b>Esc</b> menu
     </div>
 
     <!-- touch controls -->
     <div id="stick" aria-hidden="true"><div id="knob"></div></div>
     <button id="fireBtn" aria-label="Fire">FIRE</button>
+    <button id="rocketBtn" aria-label="Fire a rocket">ROCKET</button>
     <button id="exitBtn" aria-label="Back to menu">✕</button>
 
-    <!-- main menu (the game's SKY BLITZ menu) -->
+    <!-- main menu (the solo game's SKY BLITZ menu, curved like it) -->
     <section id="menu" aria-label="Main menu">
       <div class="menu-shade"></div>
       <div class="menu-panel">
@@ -80,14 +76,8 @@
             <span class="idx">01</span><span class="div"></span>
             <input id="nameInput" type="text" maxlength="16" placeholder="YOUR NAME" autocomplete="off" spellcheck="false" />
           </label>
-          <div class="row" data-row="1">
+          <button class="row" data-row="1" id="joinBtn">
             <span class="idx">02</span><span class="div"></span>
-            <button class="arrow" id="prevPlane" aria-label="Previous plane">◀</button>
-            <span class="row-text" id="planeName">RED FALCON</span>
-            <button class="arrow" id="nextPlane" aria-label="Next plane">▶</button>
-          </div>
-          <button class="row" data-row="2" id="joinBtn">
-            <span class="idx">03</span><span class="div"></span>
             <span class="row-text">JOIN BATTLE</span>
           </button>
         </div>
@@ -97,21 +87,28 @@
         <div class="footer">
           <div class="footer-rule"></div>
           <span class="keychip">W / S</span><span class="hint">SELECT</span>
-          <span class="keychip">A / D</span><span class="hint">PLANE</span>
           <span class="keychip">ENTER</span><span class="hint">JOIN</span>
         </div>
       </div>
 
       <div class="showcase">
         <canvas id="menuPlane"></canvas>
-        <div class="stats" id="planeStats"></div>
       </div>
     </section>
+
+    <!-- the menu's curve: a displacement map (built by main.js) stretching each column about the
+         middle, its left end tallest, like the solo game's GFX.menuBend -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <filter id="bendFilter" filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+        <feImage id="bendMap" preserveAspectRatio="none" result="map" />
+        <feDisplacementMap id="bendMapDisp" in="SourceGraphic" in2="map" scale="0" xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+    </svg>
 
     <div id="loading">Loading…</div>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js?v=7"></script>
+  <script type="module" src="js/main.js?v=8"></script>
 </body>
 </html>

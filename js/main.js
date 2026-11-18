@@ -25,6 +25,7 @@ const sfx = createSound(V); // the solo game's sounds and music
 const R = window.rive;
 
 // --- tuning (the solo game's numbers, in world units: its px/s at k = 1.5, / 1.5) ---------------
+const MENU_SPEED = 260; // the menu's sea and clouds rush by at this (screen px/s at the game's scale)
 const FLIGHT = {
   cruise: 153,
   boost: 253,
@@ -2054,7 +2055,8 @@ function frame(t) {
     updateRemotes(dt);
     cullViews();
     // the sea goes by under it, and slides sideways as it banks (game.luau: worldX += bank * 240 k)
-    cam.y -= 40 * dt;
+    // (fast, like the solo game's menu: OCEAN_SPEED 260 screen px/s - the plane racing over the sea)
+    cam.y -= (MENU_SPEED * (view.baseK / CAMERA.zoom) / view.k) * dt;
     cam.x += menuMotion.bank * 240 * (view.baseK / CAMERA.zoom) * dt / view.k;
     cam.angle += wrap(0 - cam.angle) * ease(1, dt);
     menuIncoming(dt);

@@ -937,6 +937,7 @@ function updateBullets(dt) {
             me.score += SCORE.hit;
             p.view && p.view.fire('hit');
             p.hpShown = Math.max(0, p.hpShown - b.dmg);
+            p.hpHitAt = performance.now(); // (shown at once; their own report catches up)
           }
         }
         break;
@@ -1160,7 +1161,9 @@ function onPlayers(all) {
     r.burning = !!st.u;
     r.shielded = !!st.i;
     r.score = st.s || 0;
-    r.hpShown = st.a ?? 100;
+    // their HP as they report it - but for a moment after my hit, never back above what my hit left
+    const rep = st.a ?? 100;
+    r.hpShown = performance.now() - (r.hpHitAt || 0) < 1500 ? Math.min(r.hpShown, rep) : rep;
     r.shieldHits = st.sh || 0;
     r.podsOut = !!st.po;
     if (!r.seen || (wasDead && !r.dead)) {
@@ -1355,6 +1358,8 @@ function onHit({ by, dmg, crash }) {
   }
   me.hp = Math.max(0, me.hp - (+dmg || 0));
   od.combo = 0; // (a hit breaks the combo)
+  // tell the others now (not on the next frame: a tab in the background has its frames paused)
+  if (me.hp > 0 && net) net.send(myState());
   sfx.play('hit_player');
   me.view && me.view.fire('hit');
   if (me.hp <= 0) goDown('shot', by, killer ? killer.name : 'PILOT');

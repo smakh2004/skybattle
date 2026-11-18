@@ -102,8 +102,7 @@ html, body {
 }
 
 /* the name tags over other planes: the menu's look - a slanted dark plate with a light edge and a
-   pink marker, the name in the game's font, and the HP as a segmented glowing bar with its number
-   (like the settings' volume sliders); amber when low, red and pulsing when critical */
+   pink marker, the name in the game's font, and the HP as one glowing line with its number; amber when low, red and pulsing when critical */
 .tag {
   position: absolute;
   left: 0;
@@ -175,15 +174,15 @@ html, body {
   width: 60px;
   height: 6px;
   transform: skewX(-20deg);
-  /* the unlit segments */
-  background: repeating-linear-gradient(90deg, rgba(230, 238, 245, 0.18) 0 4.2px, transparent 4.2px 5.2px);
+  /* the track */
+  background: rgba(230, 238, 245, 0.18);
 }
 
 .tag .bar i {
   display: block;
   height: 100%;
-  /* the lit segments, glowing */
-  background: repeating-linear-gradient(90deg, var(--hp) 0 4.2px, transparent 4.2px 5.2px);
+  /* the HP left: one glowing line */
+  background: var(--hp);
   filter: drop-shadow(0 0 3px var(--hp));
   transition: width 0.2s ease-out;
 }

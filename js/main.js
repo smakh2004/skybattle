@@ -1205,6 +1205,7 @@ function onKill(k) {
 // --- HUD (the scoreboard; the bar itself is drawn by the overlay) -------------------------------
 let boardT = 0;
 let boardRect = null;
+let lastBoard = '';
 function updateBoard(dt) {
   bannerT -= dt;
   if (bannerT <= 0) banner.classList.remove('show');
@@ -1216,14 +1217,17 @@ function updateBoard(dt) {
   for (const r of remotes.values()) if (r.seen) rows.push({ id: r.id, name: r.name, score: r.score });
   rows.sort((a, b) => b.score - a.score || (a.me ? -1 : 1));
   rows.forEach((r, i) => { r.rank = i + 1; });
-  $('#boardCount').textContent = `${rows.length} ONLINE`;
+  const count = `${rows.length} ONLINE`;
+  if ($('#boardCount').textContent !== count) $('#boardCount').textContent = count;
   const shown = rows.slice(0, BOARD_ROWS);
   const mine = rows.find((r) => r.me);
   if (mine.rank > BOARD_ROWS) shown.push(mine);
   boardRect = board.getBoundingClientRect();
-  $('#boardList').innerHTML = shown.map((r) =>
+  const html = shown.map((r) =>
     `<li class="${r.rank === 1 ? 'first' : ''} ${r.me ? 'me' : ''}"><span class="rank">${r.rank === 1 ? '★' : r.rank}</span>` +
     `<span class="name">${esc(r.name)}${r.me ? ' (YOU)' : ''}</span><span class="pts">${r.score}</span></li>`).join('');
+  // (only when it changed: the curved table is redrawn from it)
+  if (html !== lastBoard) { $('#boardList').innerHTML = html; lastBoard = html; }
 }
 
 // name tags above the other planes, and arrows at the screen's edge toward those off it
@@ -1327,57 +1331,146 @@ function selectRow(i) {
 }
 
 // Curved panels, like the solo game's (GFX.menuBend, drawPanel): each column stretched up and down
-// about the middle by 1 + curve (1 - u)^2, u running from the tall end. An SVG displacement map does
-// the stretch, so the panel stays real, clickable HTML. tallLeft: which end is the tall one.
-function bendEl(el, id, curve, tallLeft) {
-  const img = document.getElementById(id + 'Map');
-  const fe = document.getElementById(id);
-  const disp = document.getElementById(id + 'Disp');
-  if (!el || !img || !fe || !disp) return;
-  const w = el.offsetWidth, h = el.offsetHeight;
-  if (!w || !h) return;
-  const key = `${w}x${h}`;
-  if (el.dataset.bent === key) return;
-  el.dataset.bent = key;
-  const top = -h * 0.25, H = h * 1.5; // the region: room for the taller end
-  const scale = h * 0.5;
-  const cw = Math.max(2, Math.round(w / 2)), ch = Math.max(2, Math.round(H / 2));
-  const cv = document.createElement('canvas');
-  cv.width = cw; cv.height = ch;
-  const g = cv.getContext('2d');
-  const data = g.createImageData(cw, ch);
-  const yc = h / 2;
-  for (let i = 0; i < cw; i++) {
-    const u = tallLeft ? i / (cw - 1) : 1 - i / (cw - 1);
-    const s = 1 + curve * (1 - u) * (1 - u);
-    for (let j = 0; j < ch; j++) {
-      const y = top + (j / (ch - 1)) * H;
-      const dy = (y - yc) * (1 / s - 1);
-      const o = (j * cw + i) * 4;
-      data.data[o] = 128;
-      data.data[o + 1] = clamp(Math.round(128 + (dy / scale) * 255), 0, 255);
-      data.data[o + 2] = 128;
-      data.data[o + 3] = 255;
-    }
+// about the middle by 1 + curve (1 - u)^2, u running from the tall end.
+// Done the way the game does it, for the same clean look: the panel is drawn flat into a sharp image
+// (its real HTML and CSS, through an SVG snapshot, at the screen's full pixel density), then that
+// image is drawn bent column by column with smooth filtering. The real panel stays on top,
+// invisible, so typing and clicking work as before.
+let bendStyle = null; // the page's CSS with the font inlined (an SVG snapshot cannot load files)
+async function bendCss() {
+  if (bendStyle) return bendStyle;
+  const [css, font] = await Promise.all([
+    fetch(`css/style.css?v=${V}`).then((r) => r.text()),
+    fetch('fonts/RussoOne.ttf').then((r) => r.arrayBuffer()),
+  ]);
+  let bin = '';
+  const bytes = new Uint8Array(font);
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  // (the @media blocks are left out: inside the snapshot they would answer for the snapshot's own small
+  // size and switch on the phone layout)
+  let flat = '';
+  for (let i = 0; i < css.length;) {
+    const at = css.indexOf('@media', i);
+    if (at < 0) { flat += css.slice(i); break; }
+    flat += css.slice(i, at);
+    let j = css.indexOf('{', at), depth = 1;
+    for (j += 1; j < css.length && depth > 0; j++) depth += css[j] === '{' ? 1 : css[j] === '}' ? -1 : 0;
+    i = j;
   }
-  g.putImageData(data, 0, 0);
-  for (const n of [fe, img]) {
-    n.setAttribute('x', 0); n.setAttribute('y', top); n.setAttribute('width', w); n.setAttribute('height', H);
-  }
-  img.setAttribute('href', cv.toDataURL());
-  disp.setAttribute('scale', scale);
-  el.style.filter = `url(#${id})`;
+  bendStyle = flat.replace(/url\("\.\.\/fonts\/RussoOne\.ttf"\)/g, `url("data:font/ttf;base64,${btoa(bin)}")`);
+  return bendStyle;
 }
 
-// the menu: its left end the tallest (MENU.curve 0.34)
-function bendMenu() {
-  const panel = $('.menu-panel');
-  if (matchMedia('(max-width: 760px)').matches) { panel.style.filter = 'none'; panel.dataset.bent = ''; return; }
-  bendEl(panel, 'bendFilter', 0.34, true);
+class Bent {
+  constructor(el, curve, tallLeft) {
+    this.el = el;
+    this.curve = curve;
+    this.tallLeft = tallLeft;
+    this.canvas = document.createElement('canvas');
+    this.canvas.className = 'bent';
+    el.parentElement.appendChild(this.canvas);
+    this.busy = false;
+    this.again = false;
+    this.on = true;
+    // redrawn when what it shows changes (its own style is ours to set, so that is not watched)
+    new MutationObserver((list) => {
+      if (list.some((m) => !(m.type === 'attributes' && m.target === el && m.attributeName === 'style'))) this.refresh();
+    }).observe(el, { subtree: true, childList: true, characterData: true, attributes: true });
+    el.addEventListener('input', () => this.refresh());
+    el.addEventListener('focusin', () => this.refresh());
+    el.addEventListener('focusout', () => this.refresh());
+    new ResizeObserver(() => this.refresh()).observe(el);
+  }
+
+  enable(on) {
+    if (this.on === on && this.drawn) return;
+    this.on = on;
+    this.drawn = true;
+    this.el.style.opacity = on ? '0' : '';
+    this.canvas.style.display = on ? '' : 'none';
+    if (on) this.refresh();
+  }
+
+  refresh() {
+    if (!this.on) return;
+    if (this.busy) { this.again = true; return; }
+    this.busy = true;
+    this.draw().catch((e) => { console.warn('bend', e); this.enable(false); }).finally(() => {
+      this.busy = false;
+      if (this.again) { this.again = false; this.refresh(); }
+    });
+  }
+
+  async draw() {
+    const el = this.el;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    if (!w || !h) return;
+    const css = await bendCss();
+    // the panel, flat: a copy of its HTML (with what is typed in it) in an SVG image
+    const clone = el.cloneNode(true);
+    clone.style.opacity = '1';
+    clone.style.margin = '0';
+    clone.style.width = w + 'px';
+    clone.style.height = h + 'px';
+    const src = el.querySelectorAll('input'), dst = clone.querySelectorAll('input');
+    src.forEach((inp, i) => {
+      // (the caret, blinking, at the end of what is typed while the field has the focus)
+      const caret = document.activeElement === inp && Math.floor(performance.now() / 530) % 2 === 0 ? '|' : '';
+      if (inp.value) dst[i].setAttribute('value', inp.value + caret);
+      else if (caret) dst[i].setAttribute('placeholder', '|' + (inp.placeholder || ''));
+    });
+    const xml = new XMLSerializer().serializeToString(clone);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><style><![CDATA[${css}]]></style>` +
+      `<foreignObject x="0" y="0" width="${w}" height="${h}"><div xmlns="http://www.w3.org/1999/xhtml" ` +
+      `style="font-family:'Russo One',sans-serif;color:#f2f6f8;width:${w}px;height:${h}px">${xml}</div></foreignObject></svg>`;
+    const img = new Image();
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    await img.decode();
+    const d = Math.min(devicePixelRatio || 1, 2);
+    const flat = document.createElement('canvas');
+    flat.width = Math.ceil(w * d);
+    flat.height = Math.ceil(h * d);
+    flat.getContext('2d').drawImage(img, 0, 0, flat.width, flat.height);
+    // bent: one column at a time, stretched about the middle; the canvas covers the panel plus room
+    // above and below for the taller end
+    const smax = 1 + this.curve;
+    const pad = Math.ceil((h * (smax - 1)) / 2) + 2;
+    const cv = this.canvas;
+    const W = flat.width, H = flat.height, P = Math.ceil(pad * d);
+    if (cv.width !== W || cv.height !== H + 2 * P) { cv.width = W; cv.height = H + 2 * P; }
+    cv.style.width = w + 'px';
+    cv.style.height = h + 2 * pad + 'px';
+    cv.style.left = el.offsetLeft + 'px';
+    cv.style.top = el.offsetTop - pad + 'px';
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    const yc = P + H / 2;
+    for (let i = 0; i < W; i++) {
+      const u = this.tallLeft ? i / (W - 1) : 1 - i / (W - 1);
+      const s = 1 + this.curve * (1 - u) * (1 - u);
+      g.drawImage(flat, i, 0, 1, H, i, yc - (H / 2) * s, 1, H * s);
+    }
+    if (this.el.style.opacity !== '0') this.el.style.opacity = '0';
+    // a typed name keeps its caret blinking
+    if (el.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') {
+      clearTimeout(this.blink);
+      this.blink = setTimeout(() => this.refresh(), 530);
+    }
+  }
 }
-// the score table: its outer (right) end the tallest, like a panel beside the plane (PANEL_CURVE 0.3)
+
+// the menu: its left end the tallest (MENU.curve 0.34); the score table: its outer (right) end, like
+// a panel beside the plane (PANEL_CURVE 0.3). Phones keep them flat (the menu is stacked there).
 const board = $('.board');
-new ResizeObserver(() => bendEl(board, 'bendBoard', 0.3, false)).observe(board);
+const bentMenu = new Bent($('.menu-panel'), 0.34, true);
+const bentBoard = new Bent(board, 0.3, false);
+function bendMenu() {
+  const flat = matchMedia('(max-width: 760px)').matches;
+  bentMenu.enable(!flat);
+  bentBoard.enable(!flat);
+}
 
 rowsEl.forEach((r, i) => r.addEventListener('pointerenter', () => { if (phase === 'menu') selectRow(i); }));
 nameInput.addEventListener('focus', () => selectRow(0));

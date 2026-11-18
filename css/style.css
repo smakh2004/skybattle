@@ -324,7 +324,7 @@ html, body {
   backdrop-filter: blur(3px);
 }
 
-/* the menu is curved like the game's (an SVG displacement filter set up by main.js) */
+/* the menu is curved like the game's: main.js draws it bent into a canvas (.bent) over it */
 .menu-panel {
   position: relative;
   display: flex;
@@ -648,4 +648,11 @@ html, body {
     color: var(--ink);
     font-size: 16px;
   }
+}
+
+/* a curved panel's picture (main.js Bent): drawn over the real panel, which stays on top, invisible,
+   for typing and clicks */
+.bent {
+  position: absolute;
+  pointer-events: none;
 }

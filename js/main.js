@@ -128,7 +128,7 @@ const SEND_HZ = 12;
 // shot down: the plane flies on the way it was heading, speeding up (accel, world units/s²) as it
 // falls, and is gone once off the screen (or after life s)
 const DEATH = { accel: 520, life: 2.4, crashLife: 1.4, stall: 1.3 };
-// (crashLife: s a crashed plane plays its wrecked fall where it hit before it is gone; stall: how fast
+// (crashLife: unused; stall: how fast
 // a plane out of oil loses its speed (1/s) - the camera flies on, so it drops away down the screen)
 // the camera looks ahead of the plane (so the plane sits low on the screen), follows it, and turns
 // with it a little late. lead: s of travel ahead; ease: follow (1/s); turn: angle catch-up (1/s);
@@ -543,8 +543,9 @@ function goDown(cause, byId, byName) {
   me.abOrder = [];
   collects.length = 0;
   introUntil = 0;
-  if (cause === 'crash') { me.speed = 0; me.turn = 0; } // (blown up where it hit: it falls there)
-  me.camV = me.speed; // (out of oil: the camera flies on at this speed while the plane drops away)
+  // (a crash or out of oil: the camera flies on at this speed while the plane drops away behind)
+  me.camV = me.speed;
+  if (cause === 'crash') { me.speed = 0; me.turn = 0; } // (the wreck stays where it hit)
   net && net.kill(byId || session.id, byName || me.name, me.name, cause);
   if (cause === 'oil') sfx.play('sputter');
   if (cause === 'crash') {
@@ -575,7 +576,7 @@ function fly(p, dt, ctl) {
     p.deadT += dt;
     if (p === me && !p.gone) {
       const [sx, sy] = toScreen(p.x, p.y);
-      if (cause === 'crash' ? p.deadT > DEATH.crashLife : !onScreen(sx, sy, 160 * view.k / CAMERA.zoom) || p.deadT > DEATH.life) p.gone = true;
+      if (!onScreen(sx, sy, 160 * view.k / CAMERA.zoom) || p.deadT > DEATH.life) p.gone = true;
     }
     if (p.deadT > RESPAWN) {
       spawn(p);
@@ -1305,7 +1306,12 @@ function updateFling(r, dt) {
   const f = r.fling;
   const K = view.k / CAMERA.zoom;
   f.t += dt;
-  if (f.crash) { if (f.t > DEATH.crashLife) r.gone = true; return; }
+  if (f.crash) {
+    // (the wreck stays where it hit; it goes once it is off the screen)
+    const [cx, cy] = toScreen(r.x, r.y);
+    if (!onScreen(cx, cy, 160 * K) || f.t > DEATH.life) r.gone = true;
+    return;
+  }
   if (f.stall) f.v += (0 - f.v) * ease(DEATH.stall, dt);
   else f.v += DEATH.accel * dt;
   r.x += f.dx * f.v * dt;
@@ -1492,7 +1498,7 @@ function updateTags() {
 function updateCamera(dt, p = me, shift = 0) {
   if (p.dead) {
     // (it watches the plane fall away from where it went down - out of oil, it flies on without it)
-    if (p === me && p.deathCause === 'oil') {
+    if (p === me && (p.deathCause === 'oil' || p.deathCause === 'crash')) {
       const v = Math.max(p.camV || 0, FLIGHT.cruise);
       cam.x += Math.sin(cam.angle) * v * dt;
       cam.y -= Math.cos(cam.angle) * v * dt;

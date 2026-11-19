@@ -357,7 +357,7 @@ html.rot #stage {
 #feed {
   position: absolute;
   left: 16px;
-  top: calc(max(12px, env(safe-area-inset-top)) + 180px); /* (under the radar) */
+  top: calc(max(12px, env(safe-area-inset-top)) + 200px); /* (under the radar) */
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -864,14 +864,14 @@ html.rot #stage {
   position: absolute;
   left: max(14px, env(safe-area-inset-left));
   top: max(12px, env(safe-area-inset-top));
-  width: 156px;
-  height: 172px;
+  width: 150px;
+  height: 198px;
   pointer-events: none;
   z-index: 2;
 }
 /* (phones: the score table, top left there, sits just right of the radar) */
 @media (pointer: coarse) {
-  #radar { width: 92px; height: 104px; }
-  #feed { top: calc(max(12px, env(safe-area-inset-top)) + 110px); }
+  #radar { width: 92px; height: 124px; }
+  #feed { top: calc(max(12px, env(safe-area-inset-top)) + 126px); }
   .board { margin-left: 96px; }
 }

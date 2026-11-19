@@ -2223,19 +2223,22 @@ let lastSmoke = '';
 // small dots in their colours.
 const RADAR = { range: 1600, sweep: 2.4 };
 const radarCv = document.getElementById('radar');
-const radarG = radarCv.getContext('2d');
+const radarFlat = document.createElement('canvas'); // (drawn flat here, then bent onto radarCv)
+const radarG = radarFlat.getContext('2d');
+const RADAR_CURVE = 0.3; // (bent like the score table: its outer - left - end the tallest)
 const PICK_COLOR = { 1: '#ffd24a', 2: '#5ce1ff', 3: '#6be58a', 4: '#ffa238', 5: '#b592ff' };
 let radarT = 0;
 function drawRadar(dt) {
   radarT += dt;
-  const cw = radarCv.clientWidth, ch = radarCv.clientHeight;
+  const cw = radarCv.clientWidth, ch = cw;
   if (!cw) return;
   const d = Math.min(devicePixelRatio || 1, 2);
-  if (radarCv.width !== Math.round(cw * d)) { radarCv.width = Math.round(cw * d); radarCv.height = Math.round(ch * d); }
+  const FW = Math.round(cw * d), FH = Math.round(ch * d);
+  if (radarFlat.width !== FW || radarFlat.height !== FH) { radarFlat.width = FW; radarFlat.height = FH; }
   const g = radarG;
   g.setTransform(d, 0, 0, d, 0, 0);
   g.clearRect(0, 0, cw, ch);
-  const R = cw / 2 - 6, cx = cw / 2, cy = R + 6;
+  const R = cw / 2 - 6, cx = cw / 2, cy = ch / 2;
   // the disc
   const bg = g.createRadialGradient(cx, cy, 0, cx, cy, R);
   bg.addColorStop(0, 'rgba(10, 30, 44, 0.78)');
@@ -2308,12 +2311,25 @@ function drawRadar(dt) {
   g.fillStyle = '#fff';
   g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 5); g.lineTo(0, 2.5); g.lineTo(-5, 5); g.closePath(); g.fill();
   g.restore();
-  // the label
-  g.font = '9px "Russo One", sans-serif';
-  g.letterSpacing = '2px';
-  g.textAlign = 'center';
-  g.fillStyle = 'rgba(255, 77, 106, 0.95)';
-  g.fillText('RADAR', cx, ch - 3);
+  // bent: one column at a time, stretched about the middle (the left end the tallest)
+  const pad = Math.ceil((ch * RADAR_CURVE) / 2) + 2, P = Math.ceil(pad * d);
+  const outH = FH + 2 * P;
+  if (radarCv.width !== FW || radarCv.height !== outH) {
+    radarCv.width = FW;
+    radarCv.height = outH;
+    radarCv.style.height = ch + 2 * pad + 'px';
+  }
+  const o = radarCv.getContext('2d');
+  o.setTransform(1, 0, 0, 1, 0, 0);
+  o.clearRect(0, 0, FW, outH);
+  o.imageSmoothingEnabled = true;
+  o.imageSmoothingQuality = 'high';
+  const yc = P + FH / 2;
+  for (let i = 0; i < FW; i++) {
+    const u = i / (FW - 1);
+    const sc = 1 + RADAR_CURVE * (1 - u) * (1 - u);
+    o.drawImage(radarFlat, i, 0, 1, FH, i, yc - (FH / 2) * sc, 1, FH * sc);
+  }
 }
 
 function frame(t) {

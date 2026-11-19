@@ -84,7 +84,7 @@ const SPAWN_R = () => 700 + 120 * Math.sqrt(remotes.size + 1); // where planes (
 const BOARD_ROWS = 8; // the scoreboard shows the top 8 (and you, if you are lower)
 const RESPAWN = 3; // s after going down
 const SPAWN_SHIELD = 2.5; // s of invulnerability after (re)spawning
-const SCORE = { hit: 10, kill: 100 };
+const SCORE = { hit: 10, kill: 100, ram: 50 }; // (ram: a plane that crashed into my shield)
 // OVERDRIVE (the solo game's beast mode, beast.luau): kills - more in a quick combo - and hits fill the
 // meter (the glowing line along the bottom); full, OVERDRIVE runs for OD.time s: the guns fire twice
 // as fast in a spread, the aim cone widens, kills score double. (Fills faster than the solo game's:
@@ -1509,6 +1509,12 @@ function onKill(k) {
     return;
   }
   if (cause === 'crash') {
+    // they rammed me and my shield held: they went down, I did not - a small reward
+    if (k.by === session.id && k.to !== session.id && !me.dead && phase === 'play') {
+      const pts = SCORE.ram * odKill();
+      me.score += pts;
+      showBanner(`SHIELD RAM · ${cleanName(k.toName)}`, `+${pts}`);
+    }
     for (const id of [k.by, k.to]) {
       const r = remotes.get(id);
       if (r) crashRemote(r);

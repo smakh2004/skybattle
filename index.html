@@ -8,7 +8,7 @@
   <link rel="icon" href="data:," />
   <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
        browsers load the new files at once instead of a cached copy -->
-  <link rel="stylesheet" href="css/style.css?v=47" />
+  <link rel="stylesheet" href="css/style.css?v=48" />
   <script>
     // Static hosting cannot send the cross-origin isolation headers Rive needs for its threads;
     // coi-sw.js adds them. The first visit installs it and reloads once (never in a loop).
@@ -71,46 +71,48 @@
       </div>
     </section>
 
-    <!-- connecting to the arena (after PLAY): the loader's look - the sky, the title, the plane, a sweeping bar -->
+    <!-- connecting to the arena (after PLAY) -->
     <div id="connect" aria-hidden="true">
-      <div class="ld-grid"></div>
-      <div class="ld-box">
-        <div class="ld-kicker">SKY ARENA</div>
-        <div class="ld-title cx-title">CONNECTING</div>
-        <div class="ld-rule"></div>
-        <div class="ld-plane">
-          <i class="ld-streak s1"></i><i class="ld-streak s2"></i><i class="ld-streak s3"></i>
-          <svg viewBox="0 0 64 64" aria-hidden="true">
-            <path d="M32 4c3 0 5 4 5 9v9l21 6v6l-21-2v14l7 5v4l-12-2-12 2v-4l7-5V36l-21 2v-6l21-6v-9c0-5 2-9 5-9z" fill="#ff4d6a"/>
-            <path d="M32 6c2 0 3 3 3 7v8h-6v-8c0-4 1-7 3-7z" fill="#ffd0d8" opacity=".8"/>
-          </svg>
-        </div>
-        <div class="ld-bar cx-bar"><i></i></div>
-        <div class="ld-foot"><span class="cx-step"><b>SIGNING IN</b><b>FINDING THE ARENA</b><b>SYNCING PILOTS</b><b>TAKING OFF</b></span><span class="cx-dots">●●●</span></div>
+      <div class="cx-core">
+        <div class="cx-ring r1"></div>
+        <div class="cx-ring r2"></div>
+        <div class="cx-ring r3"></div>
+        <div class="cx-hex"></div>
       </div>
+      <div class="cx-text">CONNECTING TO ARENA</div>
+      <div class="cx-bar"><i></i></div>
+      <div class="cx-sub">SYNCING PILOTS · RADAR LINK</div>
     </div>
-
-    <!-- the start-up loader: the game's look (title, plane, a slanted segmented bar), shown at once -->
+    <!-- the start-up loader: flying over the sea in the game's own plane, the title rising letter by
+         letter like the game's banners, a HUD frame, and the menu-style bar filling with real progress -->
     <div id="loading">
-      <div class="ld-grid"></div>
-      <div class="ld-box">
-        <div class="ld-kicker">SKY</div>
-        <div class="ld-title">BLITZ</div>
+      <div class="ld-sea"></div>
+      <div class="ld-cloud c1"></div><div class="ld-cloud c2"></div><div class="ld-cloud c3"></div><div class="ld-cloud c4"></div>
+      <div class="ld-vignette"></div>
+      <i class="ld-corner tl"></i><i class="ld-corner tr"></i><i class="ld-corner bl"></i><i class="ld-corner br"></i>
+      <div class="ld-head">
+        <div class="ld-kicker">S K Y</div>
+        <div class="ld-title"><span>B</span><span>L</span><span>I</span><span>T</span><span>Z</span></div>
         <div class="ld-rule"></div>
-        <div class="ld-plane">
-          <i class="ld-streak s1"></i><i class="ld-streak s2"></i><i class="ld-streak s3"></i>
-          <svg viewBox="0 0 64 64" aria-hidden="true">
-            <path d="M32 4c3 0 5 4 5 9v9l21 6v6l-21-2v14l7 5v4l-12-2-12 2v-4l7-5V36l-21 2v-6l21-6v-9c0-5 2-9 5-9z" fill="#ff4d6a"/>
-            <path d="M32 6c2 0 3 3 3 7v8h-6v-8c0-4 1-7 3-7z" fill="#ffd0d8" opacity=".8"/>
-          </svg>
+        <div class="ld-tag">ONLINE AIR COMBAT</div>
+      </div>
+      <div class="ld-ship">
+        <i class="ld-trail l"></i><i class="ld-trail r"></i>
+        <img src="img/plane.svg" alt="" />
+      </div>
+      <div class="ld-panel">
+        <div class="ld-row">
+          <span class="ld-idx">01</span><span class="ld-div"></span>
+          <span id="loadStatus">STARTING ENGINES</span>
+          <span id="loadPct">0%</span>
         </div>
         <div class="ld-bar"><i id="loadFill"></i></div>
-        <div class="ld-foot"><span id="loadStatus">STARTING ENGINES</span><span id="loadPct">0%</span></div>
       </div>
+    </div>
     </div>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js?v=47"></script>
+  <script type="module" src="js/main.js?v=50"></script>
 </body>
 </html>

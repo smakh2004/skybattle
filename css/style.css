@@ -33,9 +33,14 @@ html, body {
   touch-action: none;
 }
 
+/* the game fills what the browser really shows (main.js keeps --vw / --vh at the visible size: a
+   phone's address bar and buttons never hide its bottom) */
 #stage {
   position: fixed;
-  inset: 0;
+  left: 0;
+  top: 0;
+  width: var(--vw, 100vw);
+  height: var(--vh, 100vh);
   overflow: hidden;
   touch-action: none;
 }
@@ -45,8 +50,8 @@ html.rot #stage {
   inset: auto;
   left: 0;
   top: 0;
-  width: 100vh;
-  height: 100vw;
+  width: var(--vh, 100vh);
+  height: var(--vw, 100vw);
   transform-origin: 0 0;
   transform: rotate(90deg) translateY(-100%);
 }
@@ -927,3 +932,14 @@ html.rot #stage {
 #stage[data-phase="play"] canvas.bent { animation: boardFade 0.7s ease 0.45s both; }
 @keyframes boardIn { from { transform: translateX(130%); } }
 @keyframes boardFade { from { opacity: 0; transform: translateX(60%); } to { opacity: 0.8; } }
+
+/* phones: the feed beside the radar (not over the joystick); on short screens the score table smaller
+   still, clear of the nitro button */
+@media (pointer: coarse) {
+  #feed { top: max(12px, env(safe-area-inset-top)) !important; left: 140px; }
+}
+@media (pointer: coarse) and (max-height: 420px) {
+  #hud { transform: scale(0.58); }
+  #radar { width: 104px; height: 104px; }
+  #feed { left: 124px; }
+}

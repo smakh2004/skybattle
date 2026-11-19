@@ -318,11 +318,21 @@ const view = { sw: innerWidth, sh: innerHeight, unit: 1, k: 1, baseK: 1 };
 // on-screen boxes are turned back into the game's own coordinates (loc, offs).
 const coarse = () => matchMedia('(pointer: coarse)').matches;
 let landscapeLocked = false;
+// the size the browser really shows (without a phone's address bar and buttons over it)
+function viewSize() {
+  const vv = window.visualViewport;
+  return vv ? [Math.round(vv.width), Math.round(vv.height)] : [innerWidth, innerHeight];
+}
 function fitOrientation() {
-  const rot = coarse() && !landscapeLocked && innerHeight > innerWidth;
+  const [vw, vh] = viewSize();
+  document.documentElement.style.setProperty('--vw', vw + 'px');
+  document.documentElement.style.setProperty('--vh', vh + 'px');
+  const rot = coarse() && !landscapeLocked && vh > vw;
   document.documentElement.classList.toggle('rot', rot);
 }
 fitOrientation();
+// (the bars showing / hiding, the keyboard: refit)
+if (window.visualViewport) visualViewport.addEventListener('resize', () => { fitOrientation(); measure(); });
 async function goLandscape() {
   if (!coarse() || landscapeLocked) return;
   try {
@@ -338,7 +348,7 @@ addEventListener('orientationchange', () => setTimeout(() => { fitOrientation();
 const rotated = () => document.documentElement.classList.contains('rot');
 // a pointer's place in the game (turned back when the game is turned)
 function loc(e) {
-  return rotated() ? [e.clientY, innerWidth - e.clientX] : [e.clientX, e.clientY];
+  return rotated() ? [e.clientY, viewSize()[0] - e.clientX] : [e.clientX, e.clientY];
 }
 // (the Rive runtime sizes a canvas's drawing surface from its on-screen box, which a turned game
 // reports turned - 390 x 844 for an 844 x 390 canvas - and the picture would come out squashed: while

@@ -2171,6 +2171,7 @@ async function joinGame() {
   cam.x = me.x; cam.y = me.y; cam.angle = me.heading;
   phase = 'play';
   sfx.music(true);
+  setTimeout(drawHelp, 50);
   joinedAt = performance.now();
   stage.dataset.phase = 'play';
   boardT = 0;
@@ -2330,6 +2331,54 @@ function drawRadar(dt) {
   o.clearRect(0, 0, FW, FH);
   o.drawImage(radarFlat, 0, 0);
 }
+
+// The controls hint (top middle): drawn from the #help line's text onto a canvas, bent into an arc
+// - each column dropped by its distance from the middle squared - and shown faint (CSS).
+const HELP_ARC = 12; // px the ends dip
+function drawHelp() {
+  const el = document.getElementById('help'), cv = document.getElementById('helpCv');
+  if (!el || !cv || !el.offsetWidth) return;
+  const w = el.offsetWidth, h = el.offsetHeight;
+  const d = Math.min(devicePixelRatio || 1, 2);
+  const flat = document.createElement('canvas');
+  flat.width = Math.ceil(w * d); flat.height = Math.ceil(h * d);
+  const g = flat.getContext('2d');
+  g.scale(d, d);
+  // the glass plate
+  g.fillStyle = 'rgba(6, 14, 22, 0.62)';
+  g.beginPath(); g.roundRect(0, 0, w, h, 10); g.fill();
+  g.strokeStyle = 'rgba(255, 77, 106, 0.45)';
+  g.lineWidth = 1;
+  g.beginPath(); g.roundRect(0.5, 0.5, w - 1, h - 1, 10); g.stroke();
+  // the text, its keys bold and bright (as the HTML)
+  const cs = getComputedStyle(el);
+  const size = parseFloat(cs.fontSize) || 12, fam = cs.fontFamily;
+  const parts = [];
+  for (const n of el.childNodes) parts.push({ bold: n.nodeName === 'B', text: n.textContent.replace(/\s+/g, ' ') });
+  const font = (b) => `${b ? 600 : 400} ${size}px ${fam}`;
+  let total = 0;
+  for (const p of parts) { g.font = font(p.bold); p.w = g.measureText(p.text).width; total += p.w; }
+  let x = (w - total) / 2;
+  g.textBaseline = 'middle';
+  for (const p of parts) {
+    g.font = font(p.bold);
+    g.fillStyle = p.bold ? '#f2f6f8' : 'rgba(230, 238, 245, 0.72)';
+    g.fillText(p.text, x, h / 2 + 0.5);
+    x += p.w;
+  }
+  // bent: column by column, dropped toward the ends
+  const W = flat.width, H = flat.height, A = Math.ceil(HELP_ARC * d);
+  cv.width = W; cv.height = H + A;
+  cv.style.width = w + 'px'; cv.style.height = h + HELP_ARC + 'px';
+  const o = cv.getContext('2d');
+  o.clearRect(0, 0, cv.width, cv.height);
+  for (let i = 0; i < W; i++) {
+    const nx = (i / (W - 1)) * 2 - 1;
+    o.drawImage(flat, i, 0, 1, H, i, A * nx * nx, 1, H);
+  }
+}
+addEventListener('resize', () => setTimeout(drawHelp, 50));
+(document.fonts ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(drawHelp, 100));
 
 function frame(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0);

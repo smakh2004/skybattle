@@ -94,6 +94,8 @@ html.rot #stage {
 #stage[data-phase="joining"] #me,
 #stage[data-phase="joining"] #hud,
 #stage[data-phase="joining"] #help,
+#stage[data-phase="joining"] #helpCv,
+#stage[data-phase="menu"] #helpCv,
 #stage[data-phase="joining"] .showcase,
 #stage[data-phase="menu"] #hud,
 #stage[data-phase="menu"] #help,
@@ -357,7 +359,7 @@ html.rot #stage {
 #feed {
   position: absolute;
   left: 16px;
-  top: calc(max(12px, env(safe-area-inset-top)) + 216px); /* (under the radar) */
+  top: calc(max(12px, env(safe-area-inset-top)) + 256px); /* (under the radar) */
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -694,7 +696,7 @@ html.rot #stage {
 #stick, #fireBtn, #rocketBtn { display: none !important; } /* (the overlay draws the solo game's pads) */
 
 @media (pointer: coarse) {
-  #help { display: none; }
+  #help, #helpCv { display: none !important; }
 
   #stick {
     display: block;
@@ -864,8 +866,8 @@ html.rot #stage {
   position: absolute;
   left: max(14px, env(safe-area-inset-left));
   top: max(12px, env(safe-area-inset-top));
-  width: 200px;
-  height: 200px;
+  width: 240px;
+  height: 240px;
   pointer-events: none;
   z-index: 2;
   /* curved glass like the score table: the disc stays a perfect circle, tilted toward the player -
@@ -876,7 +878,19 @@ html.rot #stage {
 }
 /* (phones: the score table, top left there, sits just right of the radar) */
 @media (pointer: coarse) {
-  #radar { width: 116px; height: 116px; }
-  #feed { top: calc(max(12px, env(safe-area-inset-top)) + 128px); }
-  .board { margin-left: 116px; }
+  #radar { width: 128px; height: 128px; }
+  #feed { top: calc(max(12px, env(safe-area-inset-top)) + 140px); }
+  .board { margin-left: 128px; }
+}
+
+/* the controls hint, top middle: drawn on a canvas, bent into an arc (its ends dipping, mirroring the
+   bottom bar) and faint; the HTML line stays only for layout */
+#help { visibility: hidden; }
+#helpCv {
+  position: absolute;
+  left: 50%;
+  top: max(10px, env(safe-area-inset-top));
+  transform: translateX(-50%);
+  opacity: 0.55;
+  pointer-events: none;
 }

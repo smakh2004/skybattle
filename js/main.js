@@ -1058,6 +1058,7 @@ function updateBullets(dt) {
         sparks.push({ x: at[0], y: at[1], t: 0 });
         if (p.shielded || p.spawnShield > 0) break;
         if (p === me && isBot(b.owner)) onHit({ by: b.owner, dmg: GUN.dmg });
+        else if (isBot(b.owner) && isBot(p.id)) hitBot(p.id, GUN.dmg, false, b.owner);
         if (b.mine && p !== me) {
           sfx.play('hit_enemy');
           hitPlayer(p.id, b.dmg);
@@ -2491,16 +2492,42 @@ function clearBots() {
   onPlayers(withBots(realPlayers)); // (gone from the board and the sky)
 }
 // my bullet / rocket / ram on a bot
-function hitBot(id, dmg, crash = false) {
+function hitBot(id, dmg, crash = false, byId = null) {
   const b = bots.get(id);
   if (!b || b.dead || b.spawnT > 0) return;
   b.hp = crash ? 0 : Math.max(0, b.hp - dmg);
+  // (shown on its tag at once)
+  const r = remotes.get(id);
+  if (r && !crash) { r.hpShown = b.hp; r.hpHitAt = performance.now(); r.view && r.view.fire('hit'); }
   if (b.hp > 0) return;
   b.dead = true;
   b.deadT = 0;
   b.dc = crash ? 1 : 0;
+  const by = byId && bots.get(byId);
+  if (by) {
+    // another bot got it: its score, and the feed
+    if (!crash) by.score += SCORE.kill;
+    onKill({ by: byId, to: id, byName: by.name, toName: b.name, cause: crash ? 'crash' : 'shot', t: Date.now() });
+    return;
+  }
   // (as if it had announced its own fall: my score, the banner, the feed)
   onKill({ by: session ? session.id : '', to: id, byName: me.name, toName: b.name, cause: crash ? 'crash' : 'shot', t: Date.now() });
+}
+// whom a bot goes after: me or another bot - the nearest (me a little favoured), kept a while
+function botTarget(b, dt) {
+  b.pickT = (b.pickT || 0) - dt;
+  const ok = (t) => t && (t === me ? !me.dead && phase === 'play' : !t.dead && t.spawnT <= 0);
+  if (b.pickT > 0 && ok(b.target)) return b.target;
+  b.pickT = rand(2.5, 5);
+  let best = null, bestD = Infinity;
+  const cands = [me, ...[...bots.values()].filter((o) => o !== b)];
+  for (const t of cands) {
+    if (!ok(t)) continue;
+    const d = Math.hypot(t.x - b.x, t.y - b.y) * (t === me ? 0.8 : 1);
+    if (d < bestD) { best = t; bestD = d; }
+  }
+  b.target = best;
+  return best;
 }
 // one shot / hit, whoever it is aimed at: a bot here, a real player over the network
 function hitPlayer(id, dmg, crash = false) {
@@ -2520,10 +2547,13 @@ function updateBots(dt) {
       continue;
     }
     b.spawnT = Math.max(0, b.spawnT - dt);
-    // fly at me (my plane's lead point), breaking off when too close, with a little wander
-    const dx = me.x - b.x, dy = me.y - b.y, dist = Math.hypot(dx, dy);
+    // fly at its target (me or the other bot), breaking off when too close, with a little wander
+    const tg = botTarget(b, dt);
+    const tx = tg ? tg.x : me.x, ty = tg ? tg.y : me.y;
+    const dx = tx - b.x, dy = ty - b.y, dist = Math.hypot(dx, dy);
+    const dme = Math.hypot(me.x - b.x, me.y - b.y);
     let want = Math.atan2(dx, -dy);
-    if (me.dead) want += Math.PI * 0.5; // (circles while I am down)
+    if (!tg) want += Math.PI * 0.5; // (circles while nobody is up)
     else if (dist < BOT.keep) want += Math.PI * 0.6 * (b.wander > 0 ? 1 : -1);
     b.wander += rand(-1, 1) * dt;
     b.wander = clamp(b.wander, -1, 1);
@@ -2533,7 +2563,7 @@ function updateBots(dt) {
     b.bank += (clamp(turn / (BOT.turn * dt || 1), -1, 1) * 0.8 - b.bank) * ease(5, dt);
     // BOOST, like mine (the same charge, speed and refill): to close in when far behind me, and now
     // and then to break away after a pass or when badly hurt
-    if (!b.boosting && b.charge > 0.6 && !me.dead && (dist > 850 || (b.hp < 35 && dist < 400) || (dist < BOT.keep && Math.random() < dt * 0.4))) b.boosting = true;
+    if (!b.boosting && b.charge > 0.6 && tg && (dist > 850 || (b.hp < 35 && dist < 400) || (dist < BOT.keep && Math.random() < dt * 0.4))) b.boosting = true;
     if (b.boosting && (b.charge <= 0 || (dist < 500 && b.hp >= 35 && dist > BOT.keep))) b.boosting = false;
     if (b.boosting) {
       b.charge = Math.max(0, b.charge - BOOST.drain * dt);
@@ -2550,11 +2580,17 @@ function updateBots(dt) {
     if (b.burstT > 0) {
       b.burstT -= dt;
       b.gunT -= dt;
-      if (ahead && dist < BOT.range && !me.dead && b.gunT <= 0) { b.shots += 1; b.gunT = BOT.gap; }
+      if (ahead && dist < BOT.range && tg && b.gunT <= 0) { b.shots += 1; b.gunT = BOT.gap; }
       if (b.burstT <= 0) b.fireT = rand(...BOT.rest);
     }
     // it rams me: both go down (my shield takes it, and only the bot goes)
-    if (!me.dead && me.spawnShield <= 0 && b.spawnT <= 0 && dist < 60) {
+    // two bots ramming each other: both go down
+    if (tg && tg !== me && b.spawnT <= 0 && dist < 60) {
+      hitBot(tg.id, 0, true, b.id);
+      hitBot(b.id, 0, true, tg.id);
+      continue;
+    }
+    if (!me.dead && me.spawnShield <= 0 && b.spawnT <= 0 && dme < 60) {
       crashInto(b.id, b.name); // (mine first: if my shield takes it I am still up, and get the ram)
       hitBot(b.id, 0, true);
     }

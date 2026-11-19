@@ -71,7 +71,13 @@ const QUALITY = [
   { world: 0.8, planes: 1.25, detail: 0.5, smoke: 0.7 }, // medium
   { world: 1, planes: 1.5, detail: 1, smoke: 1 }, // high
 ];
-let qLevel = matchMedia('(pointer: coarse)').matches ? 1 : 2; // (phones start at MEDIUM)
+// A phone or tablet: a touch screen reporting coarse pointers - or one that does not say so (in-app
+// browsers such as X's report a fine pointer): a phone's user agent, or touch with no mouse at all.
+const TOUCH = matchMedia('(pointer: coarse)').matches
+  || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+  || (navigator.maxTouchPoints > 0 && !matchMedia('(any-pointer: fine)').matches);
+document.documentElement.classList.toggle('touch', TOUCH);
+let qLevel = TOUCH ? 1 : 2; // (phones start at MEDIUM)
 try {
   const saved = localStorage.getItem('skyblitz.quality');
   if (saved !== null && +saved >= 0 && +saved <= 2) qLevel = +saved;
@@ -229,6 +235,29 @@ async function planesSource() {
 }
 
 /** One plane on screen: its own canvas and planes.riv instance. */
+// Planes share one hidden GL context, copied onto each plane's canvas. Some in-app browsers (X's) copy
+// nothing: then (found by looking at the menu plane's pixels) each plane draws with its own context.
+let planeShared = true;
+try { planeShared = localStorage.getItem('skyblitz.planesDirect') !== '1'; } catch {}
+let planeProbeT = 0;
+function probePlanes(dt) {
+  if (!planeShared || planeProbeT < 0 || !menuPlane || !menuPlane.r) return;
+  planeProbeT += dt;
+  if (planeProbeT < 2) return;
+  planeProbeT = -1; // (once)
+  try {
+    const c = menuPlane.canvas;
+    if (!c.width || !c.height) return;
+    const g = c.getContext('2d');
+    if (!g) return;
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    for (let i = 3; i < d.length; i += 16) if (d[i] > 0) return; // (drawn: all fine)
+    console.warn('planes: the shared context draws nothing here - using one context per plane');
+    localStorage.setItem('skyblitz.planesDirect', '1');
+    location.reload();
+  } catch (e) { console.warn('plane probe', e); }
+}
+
 class PlaneView {
   constructor(canvas) {
     this.canvas = canvas;
@@ -243,7 +272,7 @@ class PlaneView {
       ...(await planesSource()),
       canvas: this.canvas,
       artboard: 'Plane',
-      useOffscreenRenderer: true, // many planes share one GL context
+      useOffscreenRenderer: planeShared, // many planes share one GL context (where that works)
       layout: new R.Layout({ fit: R.Fit.Contain, alignment: R.Alignment.Center }),
     });
     this.vm = this.r.viewModelInstance;
@@ -316,7 +345,7 @@ const view = { sw: innerWidth, sh: innerHeight, unit: 1, k: 1, baseK: 1 };
 // where the browser allows it (Android); where it does not (iPhone) and the phone is held upright,
 // the whole game is turned a quarter round inside the page (html.rot) - so pointer positions and
 // on-screen boxes are turned back into the game's own coordinates (loc, offs).
-const coarse = () => matchMedia('(pointer: coarse)').matches;
+const coarse = () => TOUCH;
 let landscapeLocked = false;
 // the size the browser really shows (without a phone's address bar and buttons over it)
 function viewSize() {
@@ -1708,7 +1737,7 @@ function measure() {
     const aw = world.artboardWidth;
     view.unit = aw > 0 ? aw / view.sw : 1;
   }
-  const mobile = matchMedia('(pointer: coarse)').matches;
+  const mobile = TOUCH;
   const gameK = Math.min(3.2, Math.max(mobile ? 1.2 : 0.72, Math.min(view.sw, view.sh) / 400));
   view.baseK = gameK * CAMERA.zoom;
   view.k = view.baseK * zoomMul;
@@ -2768,6 +2797,7 @@ function frame(t) {
     // the menu: a real player flying, live (or, with nobody online, the camera drifts over the sea
     // and the showcase plane sways and fires now and then)
     menuT += dt;
+    if (phase === 'menu') probePlanes(dt);
     updateRemotes(dt);
     cullViews();
     // the sea goes by under it, and slides sideways as it banks (game.luau: worldX += bank * 240 k)
@@ -2918,7 +2948,7 @@ function frame(t) {
     setShots('musicVol', SETTINGS.music);
     const qp = svm.string('qualityText');
     if (qp && qp.value !== qualityName()) qp.value = qualityName();
-    setShots('mobile', matchMedia('(pointer: coarse)').matches ? 1 : 0);
+    setShots('mobile', TOUCH ? 1 : 0);
     const typed = cleanName(nameInput.value);
     const caret = menuSel === 1 && menuPage === 0 && phase !== 'play' && Math.floor(t / 530) % 2 === 0 ? '|' : '';
     const nameText = (typed || (caret ? '' : 'YOUR NAME')) + caret;

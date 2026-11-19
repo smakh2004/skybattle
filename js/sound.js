@@ -118,7 +118,7 @@ export function createSound(version) {
       verb = ctx.createConvolver();
       verb.buffer = ir;
       const wet = ctx.createGain();
-      wet.gain.value = 0.35;
+      wet.gain.value = 0.5;
       verb.connect(wet).connect(master);
     }
     return verb;
@@ -170,7 +170,7 @@ export function createSound(version) {
     if (!ctx) return;
     const now = ctx.currentTime;
     if (on && !wind) {
-      cine(1.1, 300, 1500, 0.5, -0.5, 0.5, 70, 45);
+      cine(1.1, 300, 1500, 1.4, -0.5, 0.5, 70, 45); // (the whoosh's level: ~3x)
       const n = noise();
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
@@ -178,7 +178,7 @@ export function createSound(version) {
       lp.frequency.value = 500;
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.0001, now);
-      g.gain.exponentialRampToValueAtTime(0.07 * sfxLevel, now + 0.8);
+      g.gain.exponentialRampToValueAtTime(0.16 * sfxLevel, now + 0.8);
       n.connect(lp).connect(g).connect(master);
       n.start();
       wind = { n, lp, g };
@@ -196,8 +196,8 @@ export function createSound(version) {
   // the wide view: a long soft whoosh as the camera pulls out; a lighter, shorter one coming back
   function whoosh(out = true) {
     if (!ctx) return;
-    if (out) cine(1.3, 1400, 260, 0.45, 0.4, -0.4, 90, 40);
-    else cine(0.9, 260, 1100, 0.3, -0.3, 0.3, 45, 70);
+    if (out) cine(1.3, 1400, 260, 1.3, 0.4, -0.4, 90, 40);
+    else cine(0.9, 260, 1100, 0.85, -0.3, 0.3, 45, 70);
   }
 
   /** The settings' SFX and MUSIC sliders (0..1). */

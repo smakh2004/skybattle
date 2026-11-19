@@ -894,3 +894,7 @@ html.rot #stage {
   opacity: 0.55;
   pointer-events: none;
 }
+
+/* the radar and the score table a little see-through, like the hint */
+#radar { opacity: 0.8; }
+#hud canvas.bent, .bent { opacity: 0.8; }

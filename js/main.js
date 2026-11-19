@@ -1140,6 +1140,7 @@ function crashInto(id, name) {
     me.shieldHits -= 1;
     me.shieldFlash = 1;
     me.hurt = Math.max(me.hurt || 0, 0.4);
+    me.ramAt = performance.now(); // (my shield took a ram: the one who rammed me may score me points)
     if (me.shieldHits <= 0) dropAbility('shield');
     me.spawnShield = 0.6; // (a moment to pull apart)
     return;
@@ -1520,7 +1521,9 @@ function onKill(k) {
   }
   if (cause === 'crash') {
     // they rammed me and my shield held: they went down, I did not - a small reward
-    if (k.by === session.id && k.to !== session.id && !me.dead && phase === 'play') {
+    // (only when my shield really took it: a crash where both go down scores nobody)
+    if (k.by === session.id && k.to !== session.id && !me.dead && phase === 'play' && performance.now() - (me.ramAt || -1e9) < 2500) {
+      me.ramAt = -1e9;
       const pts = SCORE.ram * odKill();
       me.score += pts;
       showBanner(`SHIELD RAM · ${cleanName(k.toName)}`, `+${pts}`);

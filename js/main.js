@@ -629,6 +629,7 @@ function spawn(p) {
 
 function goDown(cause, byId, byName) {
   if (me.dead) return;
+  if (isBot(byId) && bots.has(byId) && cause !== 'crash') bots.get(byId).score += SCORE.kill;
   me.dead = true;
   me.burning = true;
   me.deadT = 0;
@@ -1003,7 +1004,7 @@ function explode(m, hitP) {
     if (r === hitP) dmg = ROCKET.dmg;
     else if (Math.hypot(r.x - m.x, r.y - m.y) < ROCKET.splashR + 30) dmg = ROCKET.splash;
     if (dmg > 0) {
-      net && net.hit(r.id, dmg);
+      hitPlayer(r.id, dmg);
       if (!r.shieldHits) me.score += SCORE.hit;
       r.view && r.view.fire('hit');
     }
@@ -1056,9 +1057,10 @@ function updateBullets(dt) {
         gone = true;
         sparks.push({ x: at[0], y: at[1], t: 0 });
         if (p.shielded || p.spawnShield > 0) break;
+        if (p === me && isBot(b.owner)) onHit({ by: b.owner, dmg: GUN.dmg });
         if (b.mine && p !== me) {
           sfx.play('hit_enemy');
-          net && net.hit(p.id, b.dmg);
+          hitPlayer(p.id, b.dmg);
           if (od.t <= 0) od.meter = Math.min(1, od.meter + OD.hit);
           if (!p.shieldHits) {
             me.score += SCORE.hit;
@@ -1104,7 +1106,7 @@ function checkCollisions() {
   for (const r of remotes.values()) {
     if (!r.seen || r.dead || r.shielded) continue;
     if (!planesTouch(me, r)) continue;
-    net && net.hit(r.id, 0, true);
+    hitPlayer(r.id, 0, true);
     r.view && r.view.fire('hit');
     crashInto(r.id, r.name);
     break;
@@ -2151,7 +2153,7 @@ async function joinGame() {
   stage.dataset.phase = 'joining';
   try {
     net = net || await createNet();
-    net.onPlayers = onPlayers;
+    net.onPlayers = netPlayers;
     net.onHit = onHit;
     net.onKill = onKill;
     me.name = name;
@@ -2194,6 +2196,8 @@ async function leaveGame() {
   session = null;
   for (const r of remotes.values()) { r.view && r.view.dispose(); r.tag.remove(); r.arrow.remove(); }
   remotes.clear();
+  bots.clear();
+  realPlayers = {};
   spectId = null;
   bullets.length = 0;
   sparks.length = 0;
@@ -2428,6 +2432,126 @@ function screenFx(dt) {
   if (alarmEl.style.opacity !== av) alarmEl.style.opacity = av;
 }
 
+// --- bots: when I am the only real pilot online, two AI pilots join me (on my screen only) -------
+// They are fed in exactly like other players' network updates (onPlayers), so they fly, fire, burn,
+// fall and appear on the board like anyone; their hits on me and mine on them are settled here.
+// A real pilot joining sends them off; alone again, they come back.
+const BOT = { names: ['MAVERICK', 'ICEMAN'], alone: 2.5, speed: 160, turn: 1.6, range: 620, cone: 0.2,
+  burst: [0.9, 1.6], rest: [1.2, 2.6], gap: 0.28, respawn: 3.5, keep: 260, hpLoss: 0 };
+const bots = new Map(); // id -> state
+let realPlayers = {};
+let aloneT = 0;
+const isBot = (id) => typeof id === 'string' && id.startsWith('bot-');
+function botState(b) {
+  return { n: b.name, p: 1, c: b.hue, x: Math.round(b.x), y: Math.round(b.y), h: +b.h.toFixed(3), v: Math.round(b.v),
+    b: +b.bank.toFixed(2), q: 0, f: b.shots, pf: 0, po: 0, rk: 0, rt: '', sh: 0, d: b.dead, dc: b.dead ? b.dc : 0,
+    u: b.dead || b.hp <= LOW_HP, i: b.spawnT > 0, a: Math.round(b.hp), s: b.score, t: Date.now() };
+}
+function withBots(all) {
+  const out = { ...all };
+  for (const [id, b] of bots) out[id] = botState(b);
+  return out;
+}
+function netPlayers(all) {
+  realPlayers = all;
+  onPlayers(withBots(all));
+}
+function spawnBot(b) {
+  const a = Math.random() * Math.PI * 2, d = rand(700, 1100);
+  b.x = me.x + Math.cos(a) * d;
+  b.y = me.y + Math.sin(a) * d;
+  b.h = Math.atan2(me.x - b.x, -(me.y - b.y)) + rand(-0.6, 0.6);
+  b.v = BOT.speed;
+  b.bank = 0;
+  b.hp = MAX_HP;
+  b.dead = false;
+  b.dc = 0;
+  b.deadT = 0;
+  b.spawnT = 1.5;
+  b.fireT = rand(1, 2.5);
+  b.burstT = 0;
+  b.gunT = 0;
+  b.wander = rand(-1, 1);
+}
+function addBots() {
+  BOT.names.forEach((name, i) => {
+    const id = 'bot-' + name.toLowerCase();
+    if (bots.has(id)) return;
+    const b = { id, name, hue: 0.15 + i * 0.45, shots: 0, score: 0 };
+    spawnBot(b);
+    bots.set(id, b);
+  });
+}
+function clearBots() {
+  if (!bots.size) return;
+  bots.clear();
+  onPlayers(withBots(realPlayers)); // (gone from the board and the sky)
+}
+// my bullet / rocket / ram on a bot
+function hitBot(id, dmg, crash = false) {
+  const b = bots.get(id);
+  if (!b || b.dead || b.spawnT > 0) return;
+  b.hp = crash ? 0 : Math.max(0, b.hp - dmg);
+  if (b.hp > 0) return;
+  b.dead = true;
+  b.deadT = 0;
+  b.dc = crash ? 1 : 0;
+  // (as if it had announced its own fall: my score, the banner, the feed)
+  onKill({ by: session ? session.id : '', to: id, byName: me.name, toName: b.name, cause: crash ? 'crash' : 'shot', t: Date.now() });
+}
+// one shot / hit, whoever it is aimed at: a bot here, a real player over the network
+function hitPlayer(id, dmg, crash = false) {
+  if (isBot(id)) hitBot(id, dmg, crash);
+  else net && net.hit(id, dmg, crash);
+}
+let botSendT = 0;
+function updateBots(dt) {
+  const realOnline = Object.keys(realPlayers).length;
+  aloneT = phase === 'play' && realOnline === 0 ? aloneT + dt : 0;
+  if (realOnline > 0 || phase !== 'play') { clearBots(); return; }
+  if (!bots.size) { if (aloneT > BOT.alone) addBots(); else return; }
+  for (const b of bots.values()) {
+    if (b.dead) {
+      b.deadT += dt;
+      if (b.deadT > BOT.respawn) spawnBot(b);
+      continue;
+    }
+    b.spawnT = Math.max(0, b.spawnT - dt);
+    // fly at me (my plane's lead point), breaking off when too close, with a little wander
+    const dx = me.x - b.x, dy = me.y - b.y, dist = Math.hypot(dx, dy);
+    let want = Math.atan2(dx, -dy);
+    if (me.dead) want += Math.PI * 0.5; // (circles while I am down)
+    else if (dist < BOT.keep) want += Math.PI * 0.6 * (b.wander > 0 ? 1 : -1);
+    b.wander += rand(-1, 1) * dt;
+    b.wander = clamp(b.wander, -1, 1);
+    want += b.wander * 0.25;
+    const turn = clamp(wrap(want - b.h), -BOT.turn * dt, BOT.turn * dt);
+    b.h = wrap(b.h + turn);
+    b.bank += (clamp(turn / (BOT.turn * dt || 1), -1, 1) * 0.8 - b.bank) * ease(5, dt);
+    b.v += ((dist > 900 ? BOT.speed * 1.4 : BOT.speed) - b.v) * ease(1.5, dt);
+    b.x += Math.sin(b.h) * b.v * dt;
+    b.y -= Math.cos(b.h) * b.v * dt;
+    // fire in bursts while I am ahead and near
+    b.fireT -= dt;
+    const ahead = Math.abs(wrap(Math.atan2(dx, -dy) - b.h)) < BOT.cone;
+    if (b.fireT <= 0 && b.burstT <= 0) { b.burstT = rand(...BOT.burst); }
+    if (b.burstT > 0) {
+      b.burstT -= dt;
+      b.gunT -= dt;
+      if (ahead && dist < BOT.range && !me.dead && b.gunT <= 0) { b.shots += 1; b.gunT = BOT.gap; }
+      if (b.burstT <= 0) b.fireT = rand(...BOT.rest);
+    }
+    // it rams me: both go down (my shield takes it, and only the bot goes)
+    if (!me.dead && me.spawnShield <= 0 && b.spawnT <= 0 && dist < 60) {
+      crashInto(b.id, b.name); // (mine first: if my shield takes it I am still up, and get the ram)
+      hitBot(b.id, 0, true);
+    }
+  }
+  // fed in like a network update (at the game's send rate)
+  botSendT -= dt;
+  if (botSendT <= 0) { botSendT = 1 / SEND_HZ; onPlayers(withBots(realPlayers)); }
+}
+
 function frame(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0);
   if (lastT) watchFrames(t - lastT);
@@ -2438,6 +2562,7 @@ function frame(t) {
   if (phase === 'play') {
     readInput();
     fly(me, dt, input);
+    updateBots(dt);
     updateRemotes(dt);
     cullViews();
     checkCollisions();
@@ -2672,7 +2797,7 @@ async function boot() {
     createNet().then((n) => {
       net = net || n;
       net.prepare().catch((e) => console.warn('connect', e)); // ahead of PLAY
-      net.onPlayers = onPlayers;
+      net.onPlayers = netPlayers;
       net.onHit = onHit;
       net.onKill = onKill;
       if (net.mode === 'local') setStatus('OFFLINE TEST MODE · OPEN MORE WINDOWS TO PLAY TOGETHER');
@@ -2694,6 +2819,7 @@ if (new URLSearchParams(location.search).has('debug')) {
     fireRocket,
     die() { goDown('shot', 'test', 'TEST'); },
     get menuSel() { return menuSel; },
+    bots,
     pads: () => padPlaces(),
     get boostOn() { return boost.on; },
     od,

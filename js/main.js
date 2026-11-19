@@ -1337,6 +1337,7 @@ function makeRemote(id, st) {
   tagsLayer.appendChild(tag);
   const arrow = document.createElement('div');
   arrow.className = 'arrow-off';
+  arrow.style.display = 'none'; // (the overlay draws the markers now)
   arrow.style.display = 'none';
   tagsLayer.appendChild(arrow);
   return {
@@ -1555,15 +1556,16 @@ function updateBoard(dt) {
 }
 
 // name tags above the other planes, and arrows at the screen's edge toward those off it
+let arrowsSent = '';
 function updateTags() {
-  const m = 26;
+  const m = 34;
+  let arrows = '';
   for (const r of remotes.values()) {
-    if (!r.seen || r.gone) { r.tag.style.display = 'none'; r.arrow.style.display = 'none'; continue; }
+    if (!r.seen || r.gone) { r.tag.style.display = 'none'; continue; }
     const [x, y] = toScreen(r.x, r.y);
     const on = onScreen(x, y, 40);
     if (on) {
       r.tag.style.display = '';
-      r.arrow.style.display = 'none';
       r.tag.style.transform = `translate(${x}px, ${y - 46 * view.k}px) translate(-50%, -100%)`;
       const tg = r.tagEls || (r.tagEls = { nm: r.tag.querySelector('.nm'), bar: r.tag.querySelector('.bar i'), hpn: r.tag.querySelector('.hpn') });
       if (r.nameShown !== r.name) { tg.nm.textContent = r.name; r.nameShown = r.name; }
@@ -1578,7 +1580,6 @@ function updateTags() {
       r.tag.classList.toggle('dead', r.dead);
     } else {
       r.tag.style.display = 'none';
-      r.arrow.style.display = r.dead ? 'none' : '';
       // on the screen's edge toward them, kept off the score table and the HUD bar
       const cx = view.sw / 2, cy = view.sh / 2;
       const a = Math.atan2(y - cy, x - cx);
@@ -1587,8 +1588,13 @@ function updateTags() {
       ay = Math.min(ay, view.sh - 90);
       const br = boardRect;
       if (br && ax > br.left - 16 && ax < br.right + 16 && ay < br.bottom + 16) ay = br.bottom + 22;
-      r.arrow.style.transform = `translate(${ax}px, ${ay}px) rotate(${a + Math.PI / 2}rad)`;
+      // (drawn by the overlay: the solo game's incoming marker, its chevrons pointing their way)
+      if (!r.dead) arrows += `${(ax * view.unit).toFixed(1)} ${(ay * view.unit).toFixed(1)} ${(a + Math.PI / 2).toFixed(3)} 1;`;
     }
+  }
+  if (arrows !== arrowsSent && svm) {
+    const p = svm.string('arrows');
+    if (p) { p.value = arrows; arrowsSent = arrows; }
   }
 }
 

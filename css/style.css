@@ -687,7 +687,7 @@ html.rot #stage {
   .chevron { line-height: 50px; }
   .footer { display: none; }
   .stats { display: none; }
-  .board { width: 170px; }
+  .board { width: 250px; } /* (scaled to 72% on phones: about 180 px) */
   .hud-left { min-width: 130px; padding: 8px 10px; }
 }
 
@@ -855,10 +855,11 @@ html.rot #stage {
 @keyframes cxSweep { from { transform: translateX(-110%); } to { transform: translateX(260%); } }
 @keyframes cxBlink { 50% { opacity: 0.55; } }
 
-/* phones: the score table top-left (the right side has the fire / rocket / nitro pads) */
+/* phones: the score table top right as on a computer, smaller (the table and its curved copy scale
+   together) */
 @media (pointer: coarse) {
-  #hud { justify-content: flex-start; }
-  .board { margin-top: 8px; }
+  #hud { transform: scale(0.72); transform-origin: top right; }
+  .board { margin-top: 0; }
 }
 
 /* the radar, top left */
@@ -878,9 +879,8 @@ html.rot #stage {
 }
 /* (phones: the score table, top left there, sits just right of the radar) */
 @media (pointer: coarse) {
-  #radar { width: 128px; height: 128px; }
-  #feed { top: calc(max(12px, env(safe-area-inset-top)) + 140px); }
-  .board { margin-left: 128px; }
+  #radar { width: 120px; height: 120px; }
+  #feed { top: calc(max(12px, env(safe-area-inset-top)) + 130px); }
 }
 
 /* the controls hint, top middle: drawn on a canvas, bent into an arc (its ends dipping, mirroring the

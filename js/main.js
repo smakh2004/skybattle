@@ -1266,7 +1266,6 @@ function myState() {
     d: me.dead, dc: !me.dead ? 0 : me.deathCause === 'crash' ? 1 : me.deathCause === 'oil' ? 2 : 0, u: me.burning, i: me.spawnShield > 0,
     a: Math.round(me.hp),
     s: me.score,
-    bt: bots.size ? [...bots.values()].map((b) => ({ id: b.id, ...botState(b) })) : null,
   };
 }
 
@@ -2145,7 +2144,7 @@ function drawBoard() {
   const yc = P + H / 2;
   for (let i = 0; i < W; i++) {
     // (its outer end the tallest: the right one, or the left on a phone, where it sits top-left)
-    const u = coarse() ? i / (W - 1) : 1 - i / (W - 1);
+    const u = 1 - i / (W - 1);
     const sc = 1 + BOARD_CURVE * (1 - u) * (1 - u);
     c.drawImage(flat, i, 0, 1, H, i, yc - (H / 2) * sc, 1, H * sc);
   }
@@ -2449,7 +2448,7 @@ function screenFx(dt) {
 // They are fed in exactly like other players' network updates (onPlayers), so they fly, fire, burn,
 // fall and appear on the board like anyone; their hits on me and mine on them are settled here.
 // A real pilot joining sends them off; alone again, they come back.
-const BOT = { names: ['MAVERICK', 'ICEMAN'], maxPlayers: 3, avoid: 320, alone: 2.5, speed: 160, turn: 1.6, range: 620, cone: 0.2,
+const BOT = { names: ['MAVERICK', 'ICEMAN'], maxPlayers: 2, avoid: 320, alone: 2.5, speed: 160, turn: 1.6, range: 620, cone: 0.2,
   burst: [0.9, 1.6], rest: [1.2, 2.6], gap: 0.28, respawn: 3.5, keep: 320, hpLoss: 0 };
 const bots = new Map(); // id -> state
 let realPlayers = {};
@@ -2464,14 +2463,6 @@ const botOwner = new Map(); // bot id -> the player running it
 function withBots(all) {
   const out = { ...all };
   botOwner.clear();
-  for (const [pid, st] of Object.entries(all)) {
-    if (!st || !Array.isArray(st.bt)) continue;
-    for (const b of st.bt) {
-      if (!b || !isBot(b.id)) continue;
-      out[b.id] = { ...b, t: st.t };
-      botOwner.set(b.id, pid);
-    }
-  }
   for (const [id, b] of bots) { out[id] = botState(b); botOwner.set(id, session ? session.id : ''); }
   return out;
 }
@@ -2486,10 +2477,6 @@ function netPlayers(all) {
   onPlayers(withBots(all));
 }
 function spawnBot(b) {
-  // (a new colour each time, from the players' hues, like a player's spawn)
-  let hue = b.hue;
-  while (hue === b.hue) hue = HUES[Math.floor(Math.random() * HUES.length)];
-  b.hue = hue;
   const a = Math.random() * Math.PI * 2, d = rand(700, 1100);
   b.x = me.x + Math.cos(a) * d;
   b.y = me.y + Math.sin(a) * d;
@@ -2578,13 +2565,12 @@ function hitPlayer(id, dmg, crash = false) {
 }
 // a bot I run went down: to everyone's feed (and my own onKill) through the network
 function reportBotKill(k) {
-  if (net && net.botKill) net.botKill(k);
-  else onKill(k);
+  onKill({ ...k, t: Date.now() }); // (bots are on my screen only: their falls stay here)
 }
 let botSendT = 0;
 function updateBots(dt) {
-  // bots while 1 - 3 real pilots are in the arena; the one with the lowest id runs them for all
-  const want = phase === 'play' && realCount() <= BOT.maxPlayers && botHost();
+  // bots while 2 or fewer real pilots are in the arena (each player's own, on their screen only)
+  const want = phase === 'play' && realCount() <= BOT.maxPlayers;
   aloneT = want ? aloneT + dt : 0;
   if (!want) { clearBots(); return; }
   if (!bots.size) { if (aloneT > BOT.alone) addBots(); else return; }

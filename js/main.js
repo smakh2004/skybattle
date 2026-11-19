@@ -2440,8 +2440,8 @@ function screenFx(dt) {
 // They are fed in exactly like other players' network updates (onPlayers), so they fly, fire, burn,
 // fall and appear on the board like anyone; their hits on me and mine on them are settled here.
 // A real pilot joining sends them off; alone again, they come back.
-const BOT = { names: ['MAVERICK', 'ICEMAN'], maxPlayers: 3, alone: 2.5, speed: 160, turn: 1.6, range: 620, cone: 0.2,
-  burst: [0.9, 1.6], rest: [1.2, 2.6], gap: 0.28, respawn: 3.5, keep: 260, hpLoss: 0 };
+const BOT = { names: ['MAVERICK', 'ICEMAN'], maxPlayers: 3, avoid: 320, alone: 2.5, speed: 160, turn: 1.6, range: 620, cone: 0.2,
+  burst: [0.9, 1.6], rest: [1.2, 2.6], gap: 0.28, respawn: 3.5, keep: 320, hpLoss: 0 };
 const bots = new Map(); // id -> state
 let realPlayers = {};
 let aloneT = 0;
@@ -2594,7 +2594,31 @@ function updateBots(dt) {
     b.wander += rand(-1, 1) * dt;
     b.wander = clamp(b.wander, -1, 1);
     want += b.wander * 0.25;
-    const turn = clamp(wrap(want - b.h), -BOT.turn * dt, BOT.turn * dt);
+    // keep clear of every plane near it (me, other players, the other bot): where both will be in a
+    // moment; closing in, it turns away - the nearer, the harder (and quicker), above all else
+    let ax = 0, ay = 0, danger = 0;
+    const others = [me, ...remotes.values()].filter((o) => o.id !== b.id && (o === me ? !me.dead && phase === 'play' : o.seen && !o.dead && !o.gone));
+    for (const o of others) {
+      const ov = o === me ? me.speed : o.speed || 0, oh = o.heading || 0;
+      const la = 0.9; // (s ahead)
+      const fx = (o.x + Math.sin(oh) * ov * la) - (b.x + Math.sin(b.h) * b.v * la);
+      const fy = (o.y - Math.cos(oh) * ov * la) - (b.y - Math.cos(b.h) * b.v * la);
+      const fd = Math.min(Math.hypot(fx, fy), Math.hypot(o.x - b.x, o.y - b.y));
+      const R = bots.has(o.id) ? BOT.avoid * 1.4 : BOT.avoid; // (two bots, both fast: more room)
+      if (fd < R) {
+        const w = (1 - fd / R) ** 1.5;
+        const l = Math.hypot(fx, fy) || 1;
+        ax -= (fx / l) * w;
+        ay -= (fy / l) * w;
+        danger = Math.max(danger, w);
+      }
+    }
+    if (danger > 0) {
+      const away = Math.atan2(ax, -ay);
+      want = want + wrap(away - want) * Math.min(1, danger * 2.2);
+    }
+    const tr = BOT.turn * (1 + danger * 1.2);
+    const turn = clamp(wrap(want - b.h), -tr * dt, tr * dt);
     b.h = wrap(b.h + turn);
     b.bank += (clamp(turn / (BOT.turn * dt || 1), -1, 1) * 0.8 - b.bank) * ease(5, dt);
     // BOOST, like mine (the same charge, speed and refill): to close in when far behind me, and now

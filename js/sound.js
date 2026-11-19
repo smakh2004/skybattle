@@ -83,92 +83,121 @@ export function createSound(version) {
     }
   }
 
-  // --- made here (no file): BOOST's roar and the wide view's whoosh --------------------------
+  // --- made here (no file): soft cinematic whooshes for BOOST and the wide view -----------------
+  // Deep, rounded noise (low-passed, low Q) swelling in and out slowly, panned across, a low sub
+  // swell under it and a light reverb tail - a film-trailer whoosh, nothing buzzy or sharp.
   let noiseBuf = null;
+  let verb = null;
   function noise() {
     if (!noiseBuf) {
+      // (pinkish: white noise smoothed a little - softer than white)
       noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
       const d = noiseBuf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      let b0 = 0, b1 = 0, b2 = 0;
+      for (let i = 0; i < d.length; i++) {
+        const w = Math.random() * 2 - 1;
+        b0 = 0.99765 * b0 + w * 0.099;
+        b1 = 0.963 * b1 + w * 0.2965;
+        b2 = 0.57 * b2 + w * 1.0526;
+        d[i] = (b0 + b1 + b2 + w * 0.1848) * 0.18;
+      }
     }
     const src = ctx.createBufferSource();
     src.buffer = noiseBuf;
     src.loop = true;
     return src;
   }
-  // BOOST: a rushing jet roar (band-passed noise) over a deep engine hum, swelling in while it is held
-  // and fading out after; `amount` 0..1 follows the speed (the roar brightens as it climbs)
-  let roar = null;
+  function reverb() {
+    if (!verb) {
+      const len = Math.floor(ctx.sampleRate * 1.6);
+      const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+      for (let c = 0; c < 2; c++) {
+        const d = ir.getChannelData(c);
+        for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+      }
+      verb = ctx.createConvolver();
+      verb.buffer = ir;
+      const wet = ctx.createGain();
+      wet.gain.value = 0.35;
+      verb.connect(wet).connect(master);
+    }
+    return verb;
+  }
+  // one whoosh: `len` s long, its filter sweeping f0 -> f1, peaking at `peak` a little past the middle
+  function cine(len, f0, f1, peak, pan0, pan1, sub0, sub1) {
+    const now = ctx.currentTime;
+    const n = noise();
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.Q.value = 0.7;
+    lp.frequency.setValueAtTime(f0, now);
+    lp.frequency.exponentialRampToValueAtTime(f1, now + len * 0.55);
+    lp.frequency.exponentialRampToValueAtTime(Math.min(f0, f1) * 0.8, now + len);
+    const g = ctx.createGain();
+    const p = peak * sfxLevel;
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(p, now + len * 0.55);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + len);
+    const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    // a low sub swell under it
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(sub0, now);
+    sub.frequency.exponentialRampToValueAtTime(sub1, now + len);
+    const gs = ctx.createGain();
+    gs.gain.setValueAtTime(0.0001, now);
+    gs.gain.exponentialRampToValueAtTime(p * 0.5, now + len * 0.5);
+    gs.gain.exponentialRampToValueAtTime(0.0001, now + len);
+    let tail = g;
+    if (pan) {
+      pan.pan.setValueAtTime(pan0, now);
+      pan.pan.linearRampToValueAtTime(pan1, now + len);
+      g.connect(pan);
+      tail = pan;
+    }
+    n.connect(lp).connect(g);
+    sub.connect(gs).connect(tail === g ? g : pan);
+    tail.connect(master);
+    tail.connect(reverb());
+    n.start(now);
+    sub.start(now);
+    n.stop(now + len + 0.05);
+    sub.stop(now + len + 0.05);
+  }
+  // BOOST: a whoosh as it kicks in, then only a very soft airy wind while it is held
+  let wind = null;
   function boost(on, amount = 1) {
     if (!ctx) return;
     const now = ctx.currentTime;
-    if (on && !roar) {
+    if (on && !wind) {
+      cine(1.1, 300, 1500, 0.5, -0.5, 0.5, 70, 45);
       const n = noise();
-      const bp = ctx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.Q.value = 0.8;
-      bp.frequency.value = 500;
-      const hum = ctx.createOscillator();
-      hum.type = 'sawtooth';
-      hum.frequency.value = 55;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.value = 180;
-      const gN = ctx.createGain(), gH = ctx.createGain(), out = ctx.createGain();
-      gN.gain.value = 0.9;
-      gH.gain.value = 0.35;
-      out.gain.setValueAtTime(0, now);
-      out.gain.linearRampToValueAtTime(0.32 * sfxLevel, now + 0.18);
-      n.connect(bp).connect(gN).connect(out);
-      hum.connect(lp).connect(gH).connect(out);
-      out.connect(master);
+      lp.Q.value = 0.5;
+      lp.frequency.value = 500;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.07 * sfxLevel, now + 0.8);
+      n.connect(lp).connect(g).connect(master);
       n.start();
-      hum.start();
-      roar = { n, hum, bp, out };
+      wind = { n, lp, g };
     }
-    if (roar && on) {
-      roar.bp.frequency.setTargetAtTime(500 + 1300 * amount, now, 0.12);
-      roar.hum.frequency.setTargetAtTime(55 + 35 * amount, now, 0.15);
-      roar.out.gain.setTargetAtTime(0.32 * sfxLevel, now, 0.08);
-    }
-    if (!on && roar) {
-      const r = roar;
-      roar = null;
-      r.out.gain.cancelScheduledValues(now);
-      r.out.gain.setValueAtTime(r.out.gain.value, now);
-      r.out.gain.linearRampToValueAtTime(0, now + 0.35);
-      r.n.stop(now + 0.4);
-      r.hum.stop(now + 0.4);
+    if (wind && on) wind.lp.frequency.setTargetAtTime(450 + 400 * amount, now, 0.3);
+    if (!on && wind) {
+      const w = wind;
+      wind = null;
+      w.g.gain.cancelScheduledValues(now);
+      w.g.gain.setValueAtTime(Math.max(0.0001, w.g.gain.value), now);
+      w.g.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
+      w.n.stop(now + 0.65);
     }
   }
-  // the wide view: an airy whoosh sweeping down as the camera pulls out (`out` false: a lighter one
-  // sweeping up as it comes back)
+  // the wide view: a long soft whoosh as the camera pulls out; a lighter, shorter one coming back
   function whoosh(out = true) {
     if (!ctx) return;
-    const now = ctx.currentTime, len = out ? 0.75 : 0.5;
-    const n = noise();
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.Q.value = 1.4;
-    bp.frequency.setValueAtTime(out ? 2600 : 500, now);
-    bp.frequency.exponentialRampToValueAtTime(out ? 320 : 2200, now + len);
-    const tone = ctx.createOscillator();
-    tone.type = 'sine';
-    tone.frequency.setValueAtTime(out ? 520 : 180, now);
-    tone.frequency.exponentialRampToValueAtTime(out ? 120 : 420, now + len);
-    const g = ctx.createGain(), gt = ctx.createGain();
-    const peak = (out ? 0.42 : 0.26) * sfxLevel;
-    g.gain.setValueAtTime(0, now);
-    g.gain.linearRampToValueAtTime(peak, now + len * 0.3);
-    g.gain.exponentialRampToValueAtTime(0.0008, now + len);
-    gt.gain.value = 0.12;
-    n.connect(bp).connect(g);
-    tone.connect(gt).connect(g);
-    g.connect(master);
-    n.start(now);
-    tone.start(now);
-    n.stop(now + len + 0.05);
-    tone.stop(now + len + 0.05);
+    if (out) cine(1.3, 1400, 260, 0.45, 0.4, -0.4, 90, 40);
+    else cine(0.9, 260, 1100, 0.3, -0.3, 0.3, 45, 70);
   }
 
   /** The settings' SFX and MUSIC sliders (0..1). */

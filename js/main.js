@@ -2334,7 +2334,7 @@ function drawRadar(dt) {
 
 // The controls hint (top middle): drawn from the #help line's text onto a canvas, bent into an arc
 // - each column dropped by its distance from the middle squared - and shown faint (CSS).
-const HELP_ARC = 12; // px the ends dip
+const HELP_ARC = 0; // px the ends dip (0: straight)
 function drawHelp() {
   const el = document.getElementById('help'), cv = document.getElementById('helpCv');
   if (!el || !cv || !el.offsetWidth) return;

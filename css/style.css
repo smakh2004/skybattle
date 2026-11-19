@@ -99,6 +99,8 @@ html.rot #stage {
 #stage[data-phase="menu"] #help,
 #stage[data-phase="menu"] #feed,
 #stage[data-phase="menu"] #tags,
+#stage[data-phase="menu"] #radar,
+#stage[data-phase="joining"] #radar,
 #stage[data-phase="menu"] #stick,
 #stage[data-phase="menu"] #fireBtn,
 #stage[data-phase="menu"] #rocketBtn,
@@ -355,7 +357,7 @@ html.rot #stage {
 #feed {
   position: absolute;
   left: 16px;
-  top: max(12px, env(safe-area-inset-top));
+  top: calc(max(12px, env(safe-area-inset-top)) + 180px); /* (under the radar) */
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -855,4 +857,21 @@ html.rot #stage {
 @media (pointer: coarse) {
   #hud { justify-content: flex-start; }
   .board { margin-top: 8px; }
+}
+
+/* the radar, top left */
+#radar {
+  position: absolute;
+  left: max(14px, env(safe-area-inset-left));
+  top: max(12px, env(safe-area-inset-top));
+  width: 156px;
+  height: 172px;
+  pointer-events: none;
+  z-index: 2;
+}
+/* (phones: the score table, top left there, sits just right of the radar) */
+@media (pointer: coarse) {
+  #radar { width: 92px; height: 104px; }
+  #feed { top: calc(max(12px, env(safe-area-inset-top)) + 110px); }
+  .board { margin-left: 96px; }
 }

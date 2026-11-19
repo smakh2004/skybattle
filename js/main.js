@@ -2216,6 +2216,106 @@ function watchFrames(dtMs) {
 let lastT = 0;
 let lastOverlay = '';
 let lastSmoke = '';
+// --- the radar (top left) ----------------------------------------------------------------------
+// The game's look: a dark glass disc with a glowing pink rim, range rings, a sweeping light. I am
+// the pink arrow in the middle; it turns with the camera (up = where I fly). Other players are red
+// dots (brighter as the sweep passes them; beyond its range, on the rim toward them); power-ups are
+// small dots in their colours.
+const RADAR = { range: 1600, sweep: 2.4 };
+const radarCv = document.getElementById('radar');
+const radarG = radarCv.getContext('2d');
+const PICK_COLOR = { 1: '#ffd24a', 2: '#5ce1ff', 3: '#6be58a', 4: '#ffa238', 5: '#b592ff' };
+let radarT = 0;
+function drawRadar(dt) {
+  radarT += dt;
+  const cw = radarCv.clientWidth, ch = radarCv.clientHeight;
+  if (!cw) return;
+  const d = Math.min(devicePixelRatio || 1, 2);
+  if (radarCv.width !== Math.round(cw * d)) { radarCv.width = Math.round(cw * d); radarCv.height = Math.round(ch * d); }
+  const g = radarG;
+  g.setTransform(d, 0, 0, d, 0, 0);
+  g.clearRect(0, 0, cw, ch);
+  const R = cw / 2 - 6, cx = cw / 2, cy = R + 6;
+  // the disc
+  const bg = g.createRadialGradient(cx, cy, 0, cx, cy, R);
+  bg.addColorStop(0, 'rgba(10, 30, 44, 0.78)');
+  bg.addColorStop(1, 'rgba(6, 14, 22, 0.88)');
+  g.fillStyle = bg;
+  g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill();
+  // range rings and the cross
+  g.strokeStyle = 'rgba(230, 238, 245, 0.13)';
+  g.lineWidth = 1;
+  for (const f of [0.33, 0.66]) { g.beginPath(); g.arc(cx, cy, R * f, 0, Math.PI * 2); g.stroke(); }
+  g.beginPath(); g.moveTo(cx - R, cy); g.lineTo(cx + R, cy); g.moveTo(cx, cy - R); g.lineTo(cx, cy + R); g.stroke();
+  // the sweep: a fading wedge behind a bright line
+  const sa = (radarT * Math.PI * 2) / RADAR.sweep;
+  g.save();
+  g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.clip();
+  for (let i = 0; i < 14; i++) {
+    const a0 = sa - (i + 1) * 0.06, a1 = sa - i * 0.06;
+    g.fillStyle = `rgba(255, 77, 106, ${0.16 * (1 - i / 14)})`;
+    g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, R, a0 - Math.PI / 2, a1 - Math.PI / 2); g.closePath(); g.fill();
+  }
+  g.strokeStyle = 'rgba(255, 120, 145, 0.75)';
+  g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.sin(sa) * R, cy - Math.cos(sa) * R); g.stroke();
+  g.restore();
+  // the rim
+  g.save();
+  g.shadowColor = 'rgba(255, 77, 106, 0.85)';
+  g.shadowBlur = 10;
+  g.strokeStyle = '#ff4d6a';
+  g.lineWidth = 2;
+  g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.stroke();
+  g.restore();
+  // things around me: turned with the camera (up = ahead)
+  const c = Math.cos(-cam.angle), s = Math.sin(-cam.angle);
+  const place = (x, y, clampToRim) => {
+    const dx = x - me.x, dy = y - me.y;
+    let rx = (dx * c - dy * s) / RADAR.range, ry = (dx * s + dy * c) / RADAR.range;
+    const l = Math.hypot(rx, ry);
+    if (l > 1) { if (!clampToRim) return null; rx /= l; ry /= l; }
+    return [cx + rx * (R - 5), cy + ry * (R - 5), l > 1];
+  };
+  for (const pk of pickups) {
+    const p = place(pk.x, pk.y, false);
+    if (!p) continue;
+    g.fillStyle = PICK_COLOR[pk.kind] || '#ffd24a';
+    g.beginPath(); g.arc(p[0], p[1], 2.6, 0, Math.PI * 2); g.fill();
+  }
+  for (const r of remotes.values()) {
+    if (!r.seen || r.gone || r.dead) continue;
+    const p = place(r.x, r.y, true);
+    if (!p) continue;
+    // brighter as the sweep passes over it
+    const ang = Math.atan2(p[0] - cx, -(p[1] - cy));
+    let since = (sa - ang) % (Math.PI * 2);
+    if (since < 0) since += Math.PI * 2;
+    const ping = Math.max(0, 1 - since / (Math.PI * 0.9));
+    g.save();
+    g.shadowColor = 'rgba(255, 60, 70, 0.9)';
+    g.shadowBlur = 6 + 8 * ping;
+    g.fillStyle = p[2] ? 'rgba(255, 90, 100, 0.75)' : `rgba(255, ${70 + 120 * ping}, ${80 + 100 * ping}, 1)`;
+    g.beginPath(); g.arc(p[0], p[1], p[2] ? 3 : 3.6 + 1.2 * ping, 0, Math.PI * 2); g.fill();
+    g.restore();
+  }
+  // me: a pink arrow in the middle, pointing ahead
+  g.save();
+  g.translate(cx, cy);
+  g.rotate(me.heading - cam.angle);
+  g.shadowColor = 'rgba(255, 77, 106, 0.9)';
+  g.shadowBlur = 8;
+  g.fillStyle = '#fff';
+  g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 5); g.lineTo(0, 2.5); g.lineTo(-5, 5); g.closePath(); g.fill();
+  g.restore();
+  // the label
+  g.font = '9px "Russo One", sans-serif';
+  g.letterSpacing = '2px';
+  g.textAlign = 'center';
+  g.fillStyle = 'rgba(255, 77, 106, 0.95)';
+  g.fillText('RADAR', cx, ch - 3);
+}
+
 function frame(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0);
   if (lastT) watchFrames(t - lastT);
@@ -2344,7 +2444,7 @@ function frame(t) {
       lastSmoke = sm;
     }
   }
-  if (phase === 'play') updateTags();
+  if (phase === 'play') { updateTags(); drawRadar(dt); }
 
   // the overlay: everything over the planes, and the HUD
   if (svm) {

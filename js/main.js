@@ -729,7 +729,7 @@ function guns(p, dt, wantFire) {
     const q = p.pending[i];
     q.t -= dt;
     if (q.t <= 0) {
-      if (!p.dead) { shoot(p, q.gun, true); p.shots += 1; sfx.play('gun'); if (p === me) me.recoil = 1; }
+      if (!p.dead) { shoot(p, q.gun, true); p.shots += 1; sfx.play('gun'); }
       p.pending.splice(i, 1);
     }
   }
@@ -739,7 +739,6 @@ function guns(p, dt, wantFire) {
   shoot(p, first, true);
   p.shots += 1;
   sfx.play('gun');
-  if (p === me) me.recoil = 1;
   p.pending.push({ t: interval * rand(0.35, 0.65), gun: 1 - first });
   p.view && p.view.fire('fire');
   p.gunT = interval;
@@ -2399,30 +2398,29 @@ function screenFx(dt) {
   sfx.fire(burning);
   const K = view.baseK / CAMERA.zoom; // (the solo game's k)
   const e = play ? me.hurt * me.hurt : 0;
-  const rc = play ? me.recoil : 0;
   const t = shakeT;
+  // (gentle: a soft nudge on a hit, a slow faint sway while on fire - never in the player's way)
   let tf = '';
+  let kx = 0, ky = 0;
   if (e > 0.001) {
-    const u = t * 60, amp = 9 * K * e;
-    tf = `translate(${Math.sin(u * 1.9) * amp}px, ${Math.cos(u * 2.6) * amp * 0.8}px) rotate(${Math.sin(u * 1.3) * 0.012 * e}rad) scale(${1 + 0.035 * e})`;
-  } else if (rc > 0.01 || burning) {
-    let kx = Math.sin(t * 97) * 0.5 * rc * 1.2 * K, ky = rc * rc * 2.2 * K;
-    if (burning) {
-      kx += Math.sin(t * 23) * 1.6 * K + Math.sin(t * 41) * 0.8 * K;
-      ky += Math.cos(t * 19) * 1.4 * K + Math.sin(t * 37) * 0.7 * K;
-    }
-    tf = `translate(${kx}px, ${ky}px) scale(1.006)`;
+    kx += Math.sin(t * 19) * 2.2 * K * e;
+    ky += Math.cos(t * 15) * 1.6 * K * e;
   }
+  if (burning) {
+    kx += Math.sin(t * 2.3) * 0.6 * K + Math.sin(t * 3.7) * 0.3 * K;
+    ky += Math.cos(t * 1.9) * 0.5 * K + Math.sin(t * 3.1) * 0.25 * K;
+  }
+  if (kx || ky) tf = `translate(${kx.toFixed(2)}px, ${ky.toFixed(2)}px) scale(1.004)`;
   if (sceneEl.style.transform !== tf) sceneEl.style.transform = tf;
   // the red at the edges: the hit's flash, else the alarm while burning (a quick bright pulse, then
   // fading back, a little under once a second)
   let a = 0;
-  if (e > 0.001) a = 0.62 * me.hurt;
+  if (e > 0.001) a = 0.32 * me.hurt;
   else if (burning) {
     const ph = (t * 0.9) % 1;
     let g = ph < 0.2 ? ph / 0.2 : Math.max(0, 1 - (ph - 0.2) / 0.6);
     g = 0.15 + 0.85 * g * g;
-    a = 0.85 * g;
+    a = 0.42 * g;
   }
   const av = a.toFixed(3);
   if (alarmEl.style.opacity !== av) alarmEl.style.opacity = av;

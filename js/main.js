@@ -2410,7 +2410,9 @@ function screenFx(dt) {
     kx += Math.sin(t * 2.3) * 0.6 * K + Math.sin(t * 3.7) * 0.3 * K;
     ky += Math.cos(t * 1.9) * 0.5 * K + Math.sin(t * 3.1) * 0.25 * K;
   }
-  if (kx || ky) tf = `translate(${kx.toFixed(2)}px, ${ky.toFixed(2)}px) scale(1.004)`;
+  // (no movement: the view stays still so it never distracts from the game; the red at the edges
+  // and the fire's sound say it instead)
+  kx = ky = 0;
   if (sceneEl.style.transform !== tf) sceneEl.style.transform = tf;
   // the red at the edges: the hit's flash, else the alarm while burning (a quick bright pulse, then
   // fading back, a little under once a second)

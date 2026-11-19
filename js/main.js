@@ -629,7 +629,6 @@ function spawn(p) {
 
 function goDown(cause, byId, byName) {
   if (me.dead) return;
-  if (isBot(byId) && bots.has(byId) && cause !== 'crash') bots.get(byId).score += SCORE.kill;
   me.dead = true;
   me.burning = true;
   me.deadT = 0;
@@ -1266,6 +1265,7 @@ function myState() {
     d: me.dead, dc: !me.dead ? 0 : me.deathCause === 'crash' ? 1 : me.deathCause === 'oil' ? 2 : 0, u: me.burning, i: me.spawnShield > 0,
     a: Math.round(me.hp),
     s: me.score,
+    bt: bots.size ? [...bots.values()].map((b) => ({ id: b.id, ...botState(b) })) : null,
   };
 }
 
@@ -1481,7 +1481,8 @@ function remember(r, st) {
   if (r.buf.length > 30) r.buf.shift();
 }
 
-function onHit({ by, dmg, crash }) {
+function onHit({ by, dmg, crash, bot }) {
+  if (bot) { hitBot(bot, +dmg || 0, !!crash, by); return; } // (a hit on a bot I run)
   if (phase !== 'play' || me.dead || me.spawnShield > 0) return;
   const killer = remotes.get(by);
   if (crash) {
@@ -1511,6 +1512,8 @@ const crashSeen = new Map(); // pair -> time, so a collision is announced once
 function onKill(k) {
   if (!session) return;
   const cause = k.cause || (k.crash ? 'crash' : 'shot');
+  // a bot I run downed a player: its score
+  if (cause === 'shot' && isBot(k.by) && !isBot(k.to) && bots.has(k.by)) bots.get(k.by).score += SCORE.kill;
   if (cause === 'oil') {
     addFeed(`<b>${esc(cleanName(k.toName))}</b> ran out of oil`);
     return;
@@ -2437,7 +2440,7 @@ function screenFx(dt) {
 // They are fed in exactly like other players' network updates (onPlayers), so they fly, fire, burn,
 // fall and appear on the board like anyone; their hits on me and mine on them are settled here.
 // A real pilot joining sends them off; alone again, they come back.
-const BOT = { names: ['MAVERICK', 'ICEMAN'], alone: 2.5, speed: 160, turn: 1.6, range: 620, cone: 0.2,
+const BOT = { names: ['MAVERICK', 'ICEMAN'], maxPlayers: 3, alone: 2.5, speed: 160, turn: 1.6, range: 620, cone: 0.2,
   burst: [0.9, 1.6], rest: [1.2, 2.6], gap: 0.28, respawn: 3.5, keep: 260, hpLoss: 0 };
 const bots = new Map(); // id -> state
 let realPlayers = {};
@@ -2448,16 +2451,36 @@ function botState(b) {
     b: +b.bank.toFixed(2), q: 0, f: b.shots, pf: 0, po: 0, rk: 0, rt: '', sh: 0, d: b.dead, dc: b.dead ? b.dc : 0,
     u: b.dead || b.hp <= LOW_HP, i: b.spawnT > 0, a: Math.round(b.hp), s: b.score, t: Date.now() };
 }
+const botOwner = new Map(); // bot id -> the player running it
 function withBots(all) {
   const out = { ...all };
-  for (const [id, b] of bots) out[id] = botState(b);
+  botOwner.clear();
+  for (const [pid, st] of Object.entries(all)) {
+    if (!st || !Array.isArray(st.bt)) continue;
+    for (const b of st.bt) {
+      if (!b || !isBot(b.id)) continue;
+      out[b.id] = { ...b, t: st.t };
+      botOwner.set(b.id, pid);
+    }
+  }
+  for (const [id, b] of bots) { out[id] = botState(b); botOwner.set(id, session ? session.id : ''); }
   return out;
 }
+// the player who runs the bots: the real one with the lowest id (everyone agrees without talking)
+function botHost() {
+  const ids = [session ? session.id : '', ...Object.keys(realPlayers)].filter(Boolean).sort();
+  return ids[0] === (session && session.id);
+}
+const realCount = () => 1 + Object.keys(realPlayers).length;
 function netPlayers(all) {
   realPlayers = all;
   onPlayers(withBots(all));
 }
 function spawnBot(b) {
+  // (a new colour each time, from the players' hues, like a player's spawn)
+  let hue = b.hue;
+  while (hue === b.hue) hue = HUES[Math.floor(Math.random() * HUES.length)];
+  b.hue = hue;
   const a = Math.random() * Math.PI * 2, d = rand(700, 1100);
   b.x = me.x + Math.cos(a) * d;
   b.y = me.y + Math.sin(a) * d;
@@ -2481,7 +2504,7 @@ function addBots() {
   BOT.names.forEach((name, i) => {
     const id = 'bot-' + name.toLowerCase();
     if (bots.has(id)) return;
-    const b = { id, name, hue: 0.15 + i * 0.45, shots: 0, score: 0 };
+    const b = { id, name, hue: HUES[(i * 5 + 3) % HUES.length], shots: 0, score: 0 };
     spawnBot(b);
     bots.set(id, b);
   });
@@ -2503,24 +2526,29 @@ function hitBot(id, dmg, crash = false, byId = null) {
   b.dead = true;
   b.deadT = 0;
   b.dc = crash ? 1 : 0;
+  const cause = crash ? 'crash' : 'shot';
   const by = byId && bots.get(byId);
   if (by) {
     // another bot got it: its score, and the feed
     if (!crash) by.score += SCORE.kill;
-    onKill({ by: byId, to: id, byName: by.name, toName: b.name, cause: crash ? 'crash' : 'shot', t: Date.now() });
+    reportBotKill({ by: byId, to: id, byName: by.name, toName: b.name, cause });
     return;
   }
-  // (as if it had announced its own fall: my score, the banner, the feed)
-  onKill({ by: session ? session.id : '', to: id, byName: me.name, toName: b.name, cause: crash ? 'crash' : 'shot', t: Date.now() });
+  // a player got it (me or another): they score when the kill reaches them (onKill)
+  const pid = byId || (session ? session.id : '');
+  const pname = pid === (session && session.id) ? me.name : (remotes.get(pid) || {}).name || 'PILOT';
+  reportBotKill({ by: pid, to: id, byName: pname, toName: b.name, cause });
 }
 // whom a bot goes after: me or another bot - the nearest (me a little favoured), kept a while
 function botTarget(b, dt) {
   b.pickT = (b.pickT || 0) - dt;
-  const ok = (t) => t && (t === me ? !me.dead && phase === 'play' : !t.dead && t.spawnT <= 0);
+  const ok = (t) => t && (t === me ? !me.dead && phase === 'play'
+    : bots.has(t.id) ? !t.dead && t.spawnT <= 0 : t.seen && !t.dead && !t.gone);
   if (b.pickT > 0 && ok(b.target)) return b.target;
   b.pickT = rand(2.5, 5);
   let best = null, bestD = Infinity;
-  const cands = [me, ...[...bots.values()].filter((o) => o !== b)];
+  const players = [...remotes.values()].filter((r) => !isBot(r.id));
+  const cands = [me, ...players, ...[...bots.values()].filter((o) => o !== b)];
   for (const t of cands) {
     if (!ok(t)) continue;
     const d = Math.hypot(t.x - b.x, t.y - b.y) * (t === me ? 0.8 : 1);
@@ -2531,14 +2559,22 @@ function botTarget(b, dt) {
 }
 // one shot / hit, whoever it is aimed at: a bot here, a real player over the network
 function hitPlayer(id, dmg, crash = false) {
-  if (isBot(id)) hitBot(id, dmg, crash);
-  else net && net.hit(id, dmg, crash);
+  if (isBot(id)) {
+    if (bots.has(id)) hitBot(id, dmg, crash, session ? session.id : null);
+    else if (botOwner.has(id)) net && net.hit(botOwner.get(id), dmg, crash, id);
+  } else net && net.hit(id, dmg, crash);
+}
+// a bot I run went down: to everyone's feed (and my own onKill) through the network
+function reportBotKill(k) {
+  if (net && net.botKill) net.botKill(k);
+  else onKill(k);
 }
 let botSendT = 0;
 function updateBots(dt) {
-  const realOnline = Object.keys(realPlayers).length;
-  aloneT = phase === 'play' && realOnline === 0 ? aloneT + dt : 0;
-  if (realOnline > 0 || phase !== 'play') { clearBots(); return; }
+  // bots while 1 - 3 real pilots are in the arena; the one with the lowest id runs them for all
+  const want = phase === 'play' && realCount() <= BOT.maxPlayers && botHost();
+  aloneT = want ? aloneT + dt : 0;
+  if (!want) { clearBots(); return; }
   if (!bots.size) { if (aloneT > BOT.alone) addBots(); else return; }
   for (const b of bots.values()) {
     if (b.dead) {

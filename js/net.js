@@ -119,10 +119,20 @@ class FirebaseNet {
     if (this.meRef) this.db.set(this.meRef, { ...state, t: Date.now() });
   }
 
-  hit(to, dmg, crash = false) {
+  hit(to, dmg, crash = false, bot = null) {
     if (!this.meRef) return;
     const { push, ref } = this.db;
-    push(ref(this.database, `${ARENA}/inbox/${to}`), { by: this.uid, dmg, crash, t: Date.now() });
+    const m = { by: this.uid, dmg, crash, t: Date.now() };
+    if (bot) m.bot = bot; // (a hit on a bot: sent to the player running it)
+    push(ref(this.database, `${ARENA}/inbox/${to}`), m);
+  }
+
+  // a bot I run went down: into the kill feed for everyone (me too)
+  botKill(kill) {
+    if (!this.meRef) return;
+    const { push, ref, remove } = this.db;
+    const r = push(ref(this.database, `${ARENA}/kills`), { ...kill, t: Date.now() });
+    setTimeout(() => remove(r), 15000);
   }
 
   kill(by, byName, toName, cause = 'shot') {
@@ -172,7 +182,7 @@ class LocalNet {
       this.peers.delete(m.from);
       this.emit();
     } else if (m.type === 'hit' && m.to === this.id) {
-      this.onHit({ by: m.from, dmg: m.dmg, crash: !!m.crash });
+      this.onHit({ by: m.from, dmg: m.dmg, crash: !!m.crash, bot: m.bot || null });
     } else if (m.type === 'kill') {
       this.onKill(m.kill);
     }
@@ -212,8 +222,14 @@ class LocalNet {
     this.ch.postMessage({ type: 'state', from: this.id, state: this.last });
   }
 
-  hit(to, dmg, crash = false) {
-    this.ch.postMessage({ type: 'hit', from: this.id, to, dmg, crash });
+  hit(to, dmg, crash = false, bot = null) {
+    this.ch.postMessage({ type: 'hit', from: this.id, to, dmg, crash, bot });
+  }
+
+  botKill(kill) {
+    const k = { ...kill, t: Date.now() };
+    this.ch.postMessage({ type: 'kill', from: this.id, kill: k });
+    this.onKill(k);
   }
 
   kill(by, byName, toName, cause = 'shot') {

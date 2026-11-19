@@ -126,6 +126,7 @@ html.rot #stage {
    pink marker, the name in the game's font, and the HP as one glowing line with its number; amber when low, red and pulsing when critical */
 .tag {
   position: absolute;
+  will-change: transform; /* (moved every frame: its own layer, no repaint of its glow) */
   left: 0;
   top: 0;
   display: flex;
@@ -880,7 +881,7 @@ html.rot #stage {
      its outer (left) edge nearer, its inner edge turned away */
   transform-origin: 0 50%;
   transform: perspective(420px) rotateY(16deg);
-  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
+  /* (its soft shadow is drawn into the radar itself: a CSS filter would re-blur it every frame) */
 }
 /* (phones: the score table, top left there, sits just right of the radar) */
 @media (pointer: coarse) {

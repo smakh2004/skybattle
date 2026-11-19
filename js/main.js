@@ -1438,6 +1438,12 @@ function updateRemotes(dt) {
     r.podScale = r.podsOut ? backOut(r.podT) : r.podT * r.podT;
     r.shieldT = r.shieldHits > 0 ? Math.min(1, r.shieldT + dt * 4) : Math.max(0, r.shieldT - dt * 4);
     if (r.fling) { if (!r.gone) updateFling(r, dt); continue; }
+    // a bot I run: straight from its flight, every frame (no network delay or smoothing)
+    const bot = bots.get(r.id);
+    if (bot && !bot.dead) {
+      r.x = bot.x; r.y = bot.y; r.heading = bot.h; r.bank = bot.bank; r.pitch = 0; r.speed = bot.v;
+      continue;
+    }
     const buf = r.buf;
     if (!buf || !buf.length) continue;
     const t = nowWall - r.lag - INTERP * 1000;
@@ -2499,6 +2505,9 @@ function spawnBot(b) {
   b.burstT = 0;
   b.gunT = 0;
   b.wander = rand(-1, 1);
+  b.aim = null;
+  b.rate = 0;
+  b.breaking = false;
   b.charge = 1;
   b.chargeWait = 0;
   b.boosting = false;
@@ -2593,10 +2602,15 @@ function updateBots(dt) {
     const dme = Math.hypot(me.x - b.x, me.y - b.y);
     let want = Math.atan2(dx, -dy);
     if (!tg) want += Math.PI * 0.5; // (circles while nobody is up)
-    else if (dist < BOT.keep) want += Math.PI * 0.6 * (b.wander > 0 ? 1 : -1);
-    b.wander += rand(-1, 1) * dt;
-    b.wander = clamp(b.wander, -1, 1);
-    want += b.wander * 0.25;
+    else {
+      // a close pass: it breaks off to one side and keeps that side until well clear (no flip-flop)
+      if (!b.breaking && dist < BOT.keep) { b.breaking = true; b.breakSide = Math.random() < 0.5 ? -1 : 1; }
+      else if (b.breaking && dist > BOT.keep * 1.8) b.breaking = false;
+      if (b.breaking) want += Math.PI * 0.6 * b.breakSide;
+    }
+    // a slow, smooth wander
+    b.wanderT = (b.wanderT || 0) + dt;
+    want += Math.sin(b.wanderT * 0.7 + b.hue) * 0.2;
     // keep clear of every plane near it (me, other players, the other bot): where both will be in a
     // moment; closing in, it turns away - the nearer, the harder (and quicker), above all else
     let ax = 0, ay = 0, danger = 0;
@@ -2620,10 +2634,14 @@ function updateBots(dt) {
       const away = Math.atan2(ax, -ay);
       want = want + wrap(away - want) * Math.min(1, danger * 2.2);
     }
+    // the aim eases toward what it wants (no snapping), and the turn rate eases too
+    b.aim = b.aim == null ? want : wrap(b.aim + wrap(want - b.aim) * ease(danger > 0 ? 6 : 3, dt));
     const tr = BOT.turn * (1 + danger * 1.2);
-    const turn = clamp(wrap(want - b.h), -tr * dt, tr * dt);
-    b.h = wrap(b.h + turn);
-    b.bank += (clamp(turn / (BOT.turn * dt || 1), -1, 1) * 0.8 - b.bank) * ease(5, dt);
+    const wantRate = clamp(wrap(b.aim - b.h) * 2.5, -tr, tr);
+    b.rate = (b.rate || 0) + (wantRate - (b.rate || 0)) * ease(6, dt);
+    b.h = wrap(b.h + b.rate * dt);
+    // the bank follows the turn, smoothly (as the player's does)
+    b.bank += (clamp(b.rate / BOT.turn, -1, 1) - b.bank) * ease(FLIGHT.bankEase, dt);
     // BOOST, like mine (the same charge, speed and refill): to close in when far behind me, and now
     // and then to break away after a pass or when badly hurt
     if (!b.boosting && b.charge > 0.6 && tg && (dist > 850 || (b.hp < 35 && dist < 400) || (dist < BOT.keep && Math.random() < dt * 0.4))) b.boosting = true;

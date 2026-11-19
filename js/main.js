@@ -141,6 +141,7 @@ let wideCd = 0; // s until V works again
 let zoomMul = 1; // the camera's pull-out now (1 normal)
 function startWide() {
   if (wideCd > 0 || me.dead || phase !== 'play') return;
+  sfx.whoosh(true);
   wideT = WIDE.hold;
   wideCd = WIDE.hold + WIDE.cooldown;
 }
@@ -2227,6 +2228,7 @@ function frame(t) {
     updateBullets(dt);
     updateCamera(dt);
     // the wide view: out for WIDE.hold seconds, then back in
+    if (wideT > 0 && wideT - dt <= 0) sfx.whoosh(false); // (the camera coming back in)
     wideT = Math.max(0, wideT - dt);
     wideCd = Math.max(0, wideCd - dt);
     const zWant = wideT > 0 ? WIDE.zoom : 1;
@@ -2371,6 +2373,8 @@ function frame(t) {
     setShots('odBt', +od.bt.toFixed(3));
     setShots('odWide', wideOn ? 1 : 0);
     setShots('boost', +boost.charge.toFixed(3));
+    // BOOST's roar while it is on (brighter as the speed climbs)
+    sfx.boost(phase === 'play' && boost.on && !me.dead, clamp((me.speed - FLIGHT.cruise) / (BOOST.speed - FLIGHT.cruise), 0, 1));
     touch.rktTapT = Math.max(0, touch.rktTapT - dt);
     setShots('pads', coarse() && phase === 'play' && !me.dead ? 1 : 0);
     setShots('joyX', +touch.x.toFixed(3));

@@ -8,7 +8,7 @@
   <link rel="icon" href="data:," />
   <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
        browsers load the new files at once instead of a cached copy -->
-  <link rel="stylesheet" href="css/style.css?v=48" />
+  <link rel="stylesheet" href="css/style.css?v=51" />
   <script>
     // Static hosting cannot send the cross-origin isolation headers Rive needs for its threads;
     // coi-sw.js adds them. The first visit installs it and reloads once (never in a loop).
@@ -83,36 +83,25 @@
       <div class="cx-bar"><i></i></div>
       <div class="cx-sub">SYNCING PILOTS · RADAR LINK</div>
     </div>
-    <!-- the start-up loader: flying over the sea in the game's own plane, the title rising letter by
-         letter like the game's banners, a HUD frame, and the menu-style bar filling with real progress -->
+    <!-- the start-up loader: the same screen as connecting after PLAY (the radar lock-on), with the
+         loading stage and its percentage in the line under the bar -->
     <div id="loading">
-      <div class="ld-sea"></div>
-      <div class="ld-cloud c1"></div><div class="ld-cloud c2"></div><div class="ld-cloud c3"></div><div class="ld-cloud c4"></div>
-      <div class="ld-vignette"></div>
-      <i class="ld-corner tl"></i><i class="ld-corner tr"></i><i class="ld-corner bl"></i><i class="ld-corner br"></i>
-      <div class="ld-head">
-        <div class="ld-kicker">S K Y</div>
-        <div class="ld-title"><span>B</span><span>L</span><span>I</span><span>T</span><span>Z</span></div>
-        <div class="ld-rule"></div>
-        <div class="ld-tag">ONLINE AIR COMBAT</div>
+      <div class="cx-core">
+        <div class="cx-ring r1"></div>
+        <div class="cx-ring r2"></div>
+        <div class="cx-ring r3"></div>
+        <div class="cx-hex"></div>
       </div>
-      <div class="ld-ship">
-        <i class="ld-trail l"></i><i class="ld-trail r"></i>
-        <img src="img/plane.svg" alt="" />
-      </div>
-      <div class="ld-panel">
-        <div class="ld-row">
-          <span class="ld-idx">01</span><span class="ld-div"></span>
-          <span id="loadStatus">STARTING ENGINES</span>
-          <span id="loadPct">0%</span>
-        </div>
-        <div class="ld-bar"><i id="loadFill"></i></div>
-      </div>
+      <div class="cx-text">LOADING SKY BLITZ</div>
+      <div class="cx-bar"><i></i></div>
+      <div class="cx-sub"><span id="loadStatus">STARTING ENGINES</span> · <span id="loadPct">0%</span></div>
+      <i id="loadFill" hidden></i>
+    </div>
     </div>
     </div>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js?v=50"></script>
+  <script type="module" src="js/main.js?v=51"></script>
 </body>
 </html>

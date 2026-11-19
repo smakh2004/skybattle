@@ -8,6 +8,7 @@ const TABLE = {
   splash: [0.42, 0.2], shield_hit: [0.385, 0.06], shield_up: [0.42, 0.1], pickup: [0.42, 0.1],
   repair: [0.42, 0.1], oil: [0.42, 0.1], ui_move: [0.35, 0.04], ui_select: [0.42, 0.06],
   ui_start: [0.49, 0.3], ui_press: [0.5, 0.05], warning: [0.245, 0.6], sputter: [0.525, 1],
+  fire_loop: [0.21, 0],
 };
 const MUSIC_VOL = 0.32;
 
@@ -200,6 +201,26 @@ export function createSound(version) {
     else cine(0.9, 260, 1100, 0.85, -0.3, 0.3, 45, 70);
   }
 
+  // the burning loop (game.luau fireSnd): while the plane is on fire; it fades out after
+  let fireSrc = null, fireGain = null;
+  function fire(on) {
+    if (!ctx || !buffers.fire_loop) return;
+    const now = ctx.currentTime;
+    if (on && !fireSrc) {
+      fireGain = ctx.createGain();
+      fireGain.gain.value = TABLE.fire_loop[0] * sfxLevel;
+      fireSrc = ctx.createBufferSource();
+      fireSrc.buffer = buffers.fire_loop;
+      fireSrc.loop = true;
+      fireSrc.connect(fireGain).connect(master);
+      fireSrc.start();
+    } else if (!on && fireSrc) {
+      fireGain.gain.setTargetAtTime(0, now, 0.5);
+      fireSrc.stop(now + 2);
+      fireSrc = null;
+    }
+  }
+
   /** The settings' SFX and MUSIC sliders (0..1). */
   function levels(sfx, mus) {
     sfxLevel = sfx;
@@ -218,5 +239,5 @@ export function createSound(version) {
     return muted;
   }
 
-  return { play, music, toggleMute, setMuted, levels, boost, whoosh, get muted() { return muted; } };
+  return { play, music, toggleMute, setMuted, levels, boost, whoosh, fire, get muted() { return muted; } };
 }

@@ -898,3 +898,15 @@ html.rot #stage {
 /* the radar and the score table a little see-through, like the hint */
 #radar { opacity: 0.8; }
 #hud canvas.bent, .bent { opacity: 0.8; }
+
+/* the red at the screen's edges (game.luau draw): a soft flash on every hit, and a blinking alarm while
+   the plane is on fire; main.js sets its opacity */
+#alarm {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow: inset 0 0 110px 40px rgba(255, 30, 45, 0.85);
+  z-index: 3;
+}
+#stage[data-phase="menu"] #alarm, #stage[data-phase="joining"] #alarm { display: none; }

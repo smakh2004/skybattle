@@ -729,7 +729,7 @@ function guns(p, dt, wantFire) {
     const q = p.pending[i];
     q.t -= dt;
     if (q.t <= 0) {
-      if (!p.dead) { shoot(p, q.gun, true); p.shots += 1; sfx.play('gun'); }
+      if (!p.dead) { shoot(p, q.gun, true); p.shots += 1; sfx.play('gun'); if (p === me) me.recoil = 1; }
       p.pending.splice(i, 1);
     }
   }
@@ -739,6 +739,7 @@ function guns(p, dt, wantFire) {
   shoot(p, first, true);
   p.shots += 1;
   sfx.play('gun');
+  if (p === me) me.recoil = 1;
   p.pending.push({ t: interval * rand(0.35, 0.65), gun: 1 - first });
   p.view && p.view.fire('fire');
   p.gunT = interval;
@@ -1136,6 +1137,7 @@ function crashInto(id, name) {
     // the shield takes the ram (one block), as in the solo game
     me.shieldHits -= 1;
     me.shieldFlash = 1;
+    me.hurt = Math.max(me.hurt || 0, 0.4);
     if (me.shieldHits <= 0) dropAbility('shield');
     me.spawnShield = 0.6; // (a moment to pull apart)
     return;
@@ -1487,11 +1489,13 @@ function onHit({ by, dmg, crash }) {
   if (me.shieldHits > 0) {
     me.shieldHits -= 1;
     me.shieldFlash = 1;
+    me.hurt = Math.max(me.hurt || 0, 0.4); // (a lighter jolt: the shield took it)
     sfx.play('shield_hit');
     if (me.shieldHits <= 0) dropAbility('shield');
     return;
   }
   me.hp = Math.max(0, me.hp - (+dmg || 0));
+  me.hurt = 1; // (the screen's jolt and red flash)
   od.combo = 0; // (a hit breaks the combo)
   // tell the others now (not on the next frame: a tab in the background has its frames paused)
   if (me.hp > 0 && net) net.send(myState());
@@ -2380,6 +2384,50 @@ function drawHelp() {
 addEventListener('resize', () => setTimeout(drawHelp, 50));
 (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(drawHelp, 100));
 
+// The screen's reactions (game.luau draw): a hit jolts and twists the whole view (HUD and all), zoomed
+// in a touch, with a red flash at the edges; every shot kicks it a little; on fire it rumbles, a red
+// alarm blinks at the edges and the fire loop plays.
+const sceneEl = document.getElementById('scene');
+const alarmEl = document.getElementById('alarm');
+let shakeT = 0;
+function screenFx(dt) {
+  shakeT += dt;
+  me.hurt = Math.max(0, (me.hurt || 0) - dt * 2.4);
+  me.recoil = Math.max(0, (me.recoil || 0) - dt * 14);
+  const play = phase === 'play';
+  const burning = play && !me.dead && me.hp <= LOW_HP;
+  sfx.fire(burning);
+  const K = view.baseK / CAMERA.zoom; // (the solo game's k)
+  const e = play ? me.hurt * me.hurt : 0;
+  const rc = play ? me.recoil : 0;
+  const t = shakeT;
+  let tf = '';
+  if (e > 0.001) {
+    const u = t * 60, amp = 9 * K * e;
+    tf = `translate(${Math.sin(u * 1.9) * amp}px, ${Math.cos(u * 2.6) * amp * 0.8}px) rotate(${Math.sin(u * 1.3) * 0.012 * e}rad) scale(${1 + 0.035 * e})`;
+  } else if (rc > 0.01 || burning) {
+    let kx = Math.sin(t * 97) * 0.5 * rc * 1.2 * K, ky = rc * rc * 2.2 * K;
+    if (burning) {
+      kx += Math.sin(t * 23) * 1.6 * K + Math.sin(t * 41) * 0.8 * K;
+      ky += Math.cos(t * 19) * 1.4 * K + Math.sin(t * 37) * 0.7 * K;
+    }
+    tf = `translate(${kx}px, ${ky}px) scale(1.006)`;
+  }
+  if (sceneEl.style.transform !== tf) sceneEl.style.transform = tf;
+  // the red at the edges: the hit's flash, else the alarm while burning (a quick bright pulse, then
+  // fading back, a little under once a second)
+  let a = 0;
+  if (e > 0.001) a = 0.62 * me.hurt;
+  else if (burning) {
+    const ph = (t * 0.9) % 1;
+    let g = ph < 0.2 ? ph / 0.2 : Math.max(0, 1 - (ph - 0.2) / 0.6);
+    g = 0.15 + 0.85 * g * g;
+    a = 0.85 * g;
+  }
+  const av = a.toFixed(3);
+  if (alarmEl.style.opacity !== av) alarmEl.style.opacity = av;
+}
+
 function frame(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0);
   if (lastT) watchFrames(t - lastT);
@@ -2509,6 +2557,7 @@ function frame(t) {
     }
   }
   if (phase === 'play') { updateTags(); drawRadar(dt); }
+  screenFx(dt);
 
   // the overlay: everything over the planes, and the HUD
   if (svm) {

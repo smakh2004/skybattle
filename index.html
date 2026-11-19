@@ -8,7 +8,7 @@
   <link rel="icon" href="data:," />
   <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
        browsers load the new files at once instead of a cached copy -->
-  <link rel="stylesheet" href="css/style.css?v=70" />
+  <link rel="stylesheet" href="css/style.css?v=72" />
   <script>
     // Static hosting cannot send the cross-origin isolation headers Rive needs for its threads;
     // coi-sw.js adds them. The first visit installs it and reloads once (never in a loop).
@@ -40,6 +40,8 @@
 
     <!-- name tags over the other planes, arrows to players off screen -->
     <div id="tags" aria-hidden="true"></div>
+    <!-- the red glow at the screen's edges: a hit's flash, and the alarm while on fire -->
+    <div id="alarm" aria-hidden="true"></div>
     <!-- the radar (top left): other players and power-ups around me, turned with the camera -->
     <canvas id="radar" aria-hidden="true"></canvas>
 
@@ -105,6 +107,6 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js?v=71"></script>
+  <script type="module" src="js/main.js?v=72"></script>
 </body>
 </html>

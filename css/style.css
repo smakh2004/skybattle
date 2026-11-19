@@ -910,3 +910,8 @@ html.rot #stage {
   z-index: 3;
 }
 #stage[data-phase="menu"] #alarm, #stage[data-phase="joining"] #alarm { display: none; }
+
+/* (the view's sway and the red glow change every frame: kept on their own GPU layers, so moving them
+   never makes the page redraw - no lag) */
+#scene { will-change: transform; }
+#alarm { will-change: opacity; }

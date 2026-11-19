@@ -729,7 +729,7 @@ function guns(p, dt, wantFire) {
     const q = p.pending[i];
     q.t -= dt;
     if (q.t <= 0) {
-      if (!p.dead) { shoot(p, q.gun, true); p.shots += 1; sfx.play('gun'); }
+      if (!p.dead) { shoot(p, q.gun, true); p.shots += 1; sfx.play('gun'); if (p === me) me.recoil = 1; }
       p.pending.splice(i, 1);
     }
   }
@@ -739,6 +739,7 @@ function guns(p, dt, wantFire) {
   shoot(p, first, true);
   p.shots += 1;
   sfx.play('gun');
+  if (p === me) me.recoil = 1;
   p.pending.push({ t: interval * rand(0.35, 0.65), gun: 1 - first });
   p.view && p.view.fire('fire');
   p.gunT = interval;
@@ -2392,27 +2393,26 @@ let shakeT = 0;
 function screenFx(dt) {
   shakeT += dt;
   me.hurt = Math.max(0, (me.hurt || 0) - dt * 2.4);
-  me.recoil = Math.max(0, (me.recoil || 0) - dt * 14);
+  me.recoil = Math.max(0, (me.recoil || 0) - dt * 9);
   const play = phase === 'play';
   const burning = play && !me.dead && me.hp <= LOW_HP;
   sfx.fire(burning);
   const K = view.baseK / CAMERA.zoom; // (the solo game's k)
   const e = play ? me.hurt * me.hurt : 0;
   const t = shakeT;
-  // (gentle: a soft nudge on a hit, a slow faint sway while on fire - never in the player's way)
-  let tf = '';
-  let kx = 0, ky = 0;
+  // (subtle: a small push down with each burst, a soft nudge on a hit, a slow faint sway while on
+  // fire - smooth, low frequencies only, so it never gets in the way)
+  const rc = play ? me.recoil : 0;
+  let kx = 0, ky = rc * rc * 1.1 * K;
   if (e > 0.001) {
-    kx += Math.sin(t * 19) * 2.2 * K * e;
-    ky += Math.cos(t * 15) * 1.6 * K * e;
+    kx += Math.sin(t * 11) * 1.4 * K * e;
+    ky += Math.cos(t * 9) * 1.0 * K * e;
   }
   if (burning) {
-    kx += Math.sin(t * 2.3) * 0.6 * K + Math.sin(t * 3.7) * 0.3 * K;
-    ky += Math.cos(t * 1.9) * 0.5 * K + Math.sin(t * 3.1) * 0.25 * K;
+    kx += Math.sin(t * 2.1) * 0.7 * K;
+    ky += Math.cos(t * 1.7) * 0.55 * K;
   }
-  // (no movement: the view stays still so it never distracts from the game; the red at the edges
-  // and the fire's sound say it instead)
-  kx = ky = 0;
+  const tf = kx || ky ? `translate3d(${kx.toFixed(2)}px, ${ky.toFixed(2)}px, 0)` : '';
   if (sceneEl.style.transform !== tf) sceneEl.style.transform = tf;
   // the red at the edges: the hit's flash, else the alarm while burning (a quick bright pulse, then
   // fading back, a little under once a second)

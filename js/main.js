@@ -2164,6 +2164,7 @@ async function joinGame() {
   odReset();
   cam.x = me.x; cam.y = me.y; cam.angle = me.heading;
   phase = 'play';
+  sfx.music(true);
   joinedAt = performance.now();
   stage.dataset.phase = 'play';
   boardT = 0;
@@ -2174,6 +2175,7 @@ async function joinGame() {
 async function leaveGame() {
   if (phase !== 'play') return;
   phase = 'menu';
+  sfx.music(false);
   stage.dataset.phase = 'menu';
   keys.clear();
   touch.fire = false;
@@ -2311,25 +2313,16 @@ function drawRadar(dt) {
   g.fillStyle = '#fff';
   g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 5); g.lineTo(0, 2.5); g.lineTo(-5, 5); g.closePath(); g.fill();
   g.restore();
-  // bent: one column at a time, stretched about the middle (the left end the tallest)
-  const pad = Math.ceil((ch * RADAR_CURVE) / 2) + 2, P = Math.ceil(pad * d);
-  const outH = FH + 2 * P;
-  if (radarCv.width !== FW || radarCv.height !== outH) {
+  // (a perfect circle: copied straight across; the page tilts the whole disc in 3D - see #radar)
+  if (radarCv.width !== FW || radarCv.height !== FH) {
     radarCv.width = FW;
-    radarCv.height = outH;
-    radarCv.style.height = ch + 2 * pad + 'px';
+    radarCv.height = FH;
+    radarCv.style.height = ch + 'px';
   }
   const o = radarCv.getContext('2d');
   o.setTransform(1, 0, 0, 1, 0, 0);
-  o.clearRect(0, 0, FW, outH);
-  o.imageSmoothingEnabled = true;
-  o.imageSmoothingQuality = 'high';
-  const yc = P + FH / 2;
-  for (let i = 0; i < FW; i++) {
-    const u = i / (FW - 1);
-    const sc = 1 + RADAR_CURVE * (1 - u) * (1 - u);
-    o.drawImage(radarFlat, i, 0, 1, FH, i, yc - (FH / 2) * sc, 1, FH * sc);
-  }
+  o.clearRect(0, 0, FW, FH);
+  o.drawImage(radarFlat, 0, 0);
 }
 
 function frame(t) {
@@ -2567,7 +2560,7 @@ async function boot() {
     setWorld('quality', Q().detail);
     measure();
     if (menuSel === 1) setTimeout(focusName, 300);
-    sfx.music(true);
+    sfx.music(false); // (the soundtrack plays in the air only, not in the menu)
     saveSettings();
     setLoad(100, 'READY');
     setTimeout(() => $('#loading').classList.add('done'), 250);

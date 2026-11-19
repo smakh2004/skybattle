@@ -357,7 +357,7 @@ html.rot #stage {
 #feed {
   position: absolute;
   left: 16px;
-  top: calc(max(12px, env(safe-area-inset-top)) + 200px); /* (under the radar) */
+  top: calc(max(12px, env(safe-area-inset-top)) + 166px); /* (under the radar) */
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -865,13 +865,18 @@ html.rot #stage {
   left: max(14px, env(safe-area-inset-left));
   top: max(12px, env(safe-area-inset-top));
   width: 150px;
-  height: 198px;
+  height: 150px;
   pointer-events: none;
   z-index: 2;
+  /* curved glass like the score table: the disc stays a perfect circle, tilted toward the player -
+     its outer (left) edge nearer, its inner edge turned away */
+  transform-origin: 0 50%;
+  transform: perspective(420px) rotateY(16deg);
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
 }
 /* (phones: the score table, top left there, sits just right of the radar) */
 @media (pointer: coarse) {
-  #radar { width: 92px; height: 124px; }
-  #feed { top: calc(max(12px, env(safe-area-inset-top)) + 126px); }
+  #radar { width: 92px; height: 92px; }
+  #feed { top: calc(max(12px, env(safe-area-inset-top)) + 104px); }
   .board { margin-left: 96px; }
 }

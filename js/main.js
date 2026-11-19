@@ -139,6 +139,11 @@ const WIDE = { zoom: 0.6, hold: 4, ease: 3, cooldown: 6 };
 let wideT = 0; // s of wide view left
 let wideCd = 0; // s until V works again
 let zoomMul = 1; // the camera's pull-out now (1 normal)
+function startWide() {
+  if (wideCd > 0 || me.dead || phase !== 'play') return;
+  wideT = WIDE.hold;
+  wideCd = WIDE.hold + WIDE.cooldown;
+}
 
 // --- dom ------------------------------------------------------------------------------------
 const $ = (s) => document.querySelector(s);
@@ -306,6 +311,50 @@ class PlaneView {
 
 // --- state ----------------------------------------------------------------------------------
 const view = { sw: innerWidth, sh: innerHeight, unit: 1, k: 1, baseK: 1 };
+// Phones: the game is played sideways. The first tap goes fullscreen and locks the screen to landscape
+// where the browser allows it (Android); where it does not (iPhone) and the phone is held upright,
+// the whole game is turned a quarter round inside the page (html.rot) - so pointer positions and
+// on-screen boxes are turned back into the game's own coordinates (loc, offs).
+const coarse = () => matchMedia('(pointer: coarse)').matches;
+let landscapeLocked = false;
+function fitOrientation() {
+  const rot = coarse() && !landscapeLocked && innerHeight > innerWidth;
+  document.documentElement.classList.toggle('rot', rot);
+}
+fitOrientation();
+async function goLandscape() {
+  if (!coarse() || landscapeLocked) return;
+  try {
+    const el = document.documentElement;
+    if (!document.fullscreenElement && el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' });
+    if (screen.orientation && screen.orientation.lock) { await screen.orientation.lock('landscape'); landscapeLocked = true; }
+  } catch { /* (not allowed here: the page turns the game instead) */ }
+  fitOrientation();
+  measure();
+}
+addEventListener('pointerdown', () => { goLandscape(); }, { once: true, capture: true });
+addEventListener('orientationchange', () => setTimeout(() => { fitOrientation(); measure(); }, 200));
+const rotated = () => document.documentElement.classList.contains('rot');
+// a pointer's place in the game (turned back when the game is turned)
+function loc(e) {
+  return rotated() ? [e.clientY, innerWidth - e.clientX] : [e.clientX, e.clientY];
+}
+// (the Rive runtime sizes a canvas's drawing surface from its on-screen box, which a turned game
+// reports turned - 390 x 844 for an 844 x 390 canvas - and the picture would come out squashed: while
+// turned, canvases report their own unturned box)
+const canvasRect = HTMLCanvasElement.prototype.getBoundingClientRect;
+HTMLCanvasElement.prototype.getBoundingClientRect = function () {
+  if (!rotated()) return canvasRect.call(this);
+  const r = offs(this);
+  return { x: r.left, y: r.top, left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height, toJSON() { return this; } };
+};
+// an element's box in the game's own (layout) coordinates, whatever is turned
+function offs(el) {
+  let x = 0, y = 0;
+  const w = el.offsetWidth, h = el.offsetHeight;
+  for (let n = el; n; n = n.offsetParent) { x += n.offsetLeft; y += n.offsetTop; }
+  return { left: x, top: y, width: w, height: h, right: x + w, bottom: y + h };
+}
 const cam = { x: 0, y: 0, angle: 0 };
 let phase = 'menu'; // 'menu' | 'joining' | 'play'
 let net = null;
@@ -373,7 +422,57 @@ const smoke = []; // { x, y, vx, vy, t, life, r0, r1, a, light }
 // --- input ----------------------------------------------------------------------------------
 const keys = new Set();
 const input = { x: 0, y: 0, fire: false }; // x: turn -1..1, y: throttle -1 (boost) .. 1 (brake)
-const touch = { x: 0, y: 0, fire: false, stickId: null };
+const touch = { x: 0, y: 0, fire: false, stickId: null, fireId: null, boostId: null, rktTapT: 0, lastTap: 0, lastX: 0, lastY: 0 };
+// The phone's pads, drawn by the overlay (the solo game's): their places come back in padHit
+// ("jx jy jr;fx fy fr;rx ry rr;nx ny nr;", overlay units). Joystick bottom-left; FIRE (held), ROCKET
+// (tap) and NITRO (held) on the right; a double tap anywhere else pulls the view out (V).
+function padPlaces() {
+  const p = svm && svm.string('padHit');
+  if (!p || !p.value) return null;
+  const v = p.value.split(';').filter(Boolean).map((r) => r.split(' ').map((n) => +n / view.unit));
+  return v.length === 4 ? { joy: v[0], fire: v[1], rkt: v[2], nitro: v[3] } : null;
+}
+const onPad = (x, y, c, grow = 1.3) => c && c[2] > 0 && Math.hypot(x - c[0], y - c[1]) < c[2] * grow;
+function joyAt(x, y, j) {
+  let dx = (x - j[0]) / j[2], dy = (y - j[1]) / j[2];
+  const d = Math.hypot(dx, dy);
+  if (d > 1) { dx /= d; dy /= d; }
+  touch.x = dx;
+  touch.y = dy;
+}
+const stageEl0 = document.getElementById('stage');
+stageEl0.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' || phase !== 'play') return;
+  const pads = padPlaces();
+  if (!pads) return;
+  const [x, y] = loc(e);
+  if (onPad(x, y, pads.fire)) { touch.fire = true; touch.fireId = e.pointerId; }
+  else if (onPad(x, y, pads.nitro, 1.35)) touch.boostId = e.pointerId;
+  else if (onPad(x, y, pads.rkt, 1.35)) { fireRocket(); touch.rktTapT = 0.15; }
+  else if (x < view.sw * 0.45) { touch.stickId = e.pointerId; joyAt(x, y, pads.joy); }
+  else {
+    // a double tap: the wide view
+    const now = performance.now();
+    if (now - touch.lastTap < 320 && Math.hypot(x - touch.lastX, y - touch.lastY) < 90) { startWide(); touch.lastTap = 0; }
+    else { touch.lastTap = now; touch.lastX = x; touch.lastY = y; }
+    return;
+  }
+  e.preventDefault();
+}, { passive: false });
+stageEl0.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== touch.stickId) return;
+  const pads = padPlaces();
+  if (!pads) return;
+  const [x, y] = loc(e);
+  joyAt(x, y, pads.joy);
+});
+const padUp = (e) => {
+  if (e.pointerId === touch.stickId) { touch.stickId = null; touch.x = touch.y = 0; }
+  if (e.pointerId === touch.fireId) { touch.fireId = null; touch.fire = false; }
+  if (e.pointerId === touch.boostId) touch.boostId = null;
+};
+addEventListener('pointerup', padUp);
+addEventListener('pointercancel', padUp);
 
 addEventListener('keydown', (e) => {
   if (phase !== 'play') return;
@@ -381,7 +480,7 @@ addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'Escape') leaveGame();
   if (e.code === 'KeyQ') fireRocket();
-  if (e.code === 'KeyV' && wideCd <= 0 && !me.dead) { wideT = WIDE.hold; wideCd = WIDE.hold + WIDE.cooldown; }
+  if (e.code === 'KeyV') startWide();
   if (e.code === 'KeyM') { SETTINGS.sound = !SETTINGS.sound; saveSettings(); }
   if (e.code === 'Space') e.preventDefault();
 });
@@ -441,7 +540,7 @@ function readInput() {
   if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
   if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
   let fire = keys.has('Space') || touch.fire;
-  input.boost = keys.has('KeyE');
+  input.boost = keys.has('KeyE') || touch.boostId !== null;
   if (touch.stickId !== null) { x = touch.x; y = touch.y; }
   const pads = padsOn && navigator.getGamepads ? navigator.getGamepads() : [];
   for (const p of pads) {
@@ -1450,7 +1549,7 @@ function updateBoard(dt) {
     `<span class="name">${esc(r.name)}${r.me ? ' (YOU)' : ''}</span><span class="pts">${r.score}</span></li>`).join('');
   // (only when it changed: the curved table is redrawn from it)
   if (html !== lastBoard) { $('#boardList').innerHTML = html; lastBoard = html; boardRect = null; }
-  if (!boardRect) boardRect = board.getBoundingClientRect();
+  if (!boardRect) boardRect = offs(board);
   drawBoard();
 }
 
@@ -1486,9 +1585,7 @@ function updateTags() {
       let ax = cx + Math.cos(a) * s, ay = cy + Math.sin(a) * s;
       ay = Math.min(ay, view.sh - 90);
       const br = boardRect;
-      if (br && ax > br.left - 16 && ay < br.bottom + 16) {
-        if (Math.abs(Math.sin(a)) > 0.7) ax = Math.min(ax, br.left - 20); else ay = br.bottom + 22;
-      }
+      if (br && ax > br.left - 16 && ax < br.right + 16 && ay < br.bottom + 16) ay = br.bottom + 22;
       r.arrow.style.transform = `translate(${ax}px, ${ay}px) rotate(${a + Math.PI / 2}rad)`;
     }
   }
@@ -1562,8 +1659,9 @@ function setShots(name, v) {
 }
 
 function measure() {
-  view.sw = innerWidth;
-  view.sh = innerHeight;
+  const stageEl = $('#stage');
+  view.sw = stageEl.clientWidth || innerWidth;
+  view.sh = stageEl.clientHeight || innerHeight;
   if (world) {
     world.resizeDrawingSurfaceToCanvas(worldDpr());
     const aw = world.artboardWidth;
@@ -1579,7 +1677,7 @@ function measure() {
   if (menuPlane) menuPlane.setSize(Math.round($('#menuPlane').clientWidth || 300));
   bendMenu();
 }
-addEventListener('resize', () => { boardRect = null; measure(); });
+addEventListener('resize', () => { boardRect = null; fitOrientation(); measure(); });
 
 // --- menu: the solo game's MainMenu (drawn by the overlay, bent like the game's) ---------------
 // 01 the player's name, 02 PLAY, 03 CONTROLS (the controls list). W / S or the arrows select, ENTER
@@ -1616,7 +1714,7 @@ function menuIncoming(dt) {
   m.hitT -= dt;
   if (m.hitT > 0) return;
   m.hitT = 1000; // (the next is scheduled when it is level again)
-  const r = $('#menuPlane').getBoundingClientRect();
+  const r = offs($('#menuPlane'));
   if (!r.width) return;
   const sx = r.left + r.width / 2, sy = r.top + r.height * 0.45;
   const n = 2 + Math.floor(Math.random() * 2);
@@ -1715,18 +1813,20 @@ function sliderAt(i, x) {
 }
 let dragRow = 0;
 menuEl.addEventListener('pointermove', (e) => {
-  if (dragRow) { const v = sliderAt(dragRow, e.clientX); if (v !== null) slide(dragRow, v); return; }
-  const i = rowAt(e.clientX, e.clientY);
+  const [px, py] = loc(e);
+  if (dragRow) { const v = sliderAt(dragRow, px); if (v !== null) slide(dragRow, v); return; }
+  const i = rowAt(px, py);
   if (i && i !== menuSel) setSel(i);
 });
 menuEl.addEventListener('pointerdown', (e) => {
-  const i = rowAt(e.clientX, e.clientY);
+  const [px, py] = loc(e);
+  const i = rowAt(px, py);
   if (!i) return;
   e.preventDefault();
   if (i !== menuSel) setSel(i);
   if (menuPage === 1 && i > 3) {
     dragRow = i;
-    const v = sliderAt(i, e.clientX);
+    const v = sliderAt(i, px);
     if (v !== null) slide(i, v);
     return;
   }
@@ -1931,8 +2031,8 @@ function drawBoard() {
   g.setTransform(1, 0, 0, 1, 0, 0);
   g.clearRect(0, 0, W, H);
   g.scale(d, d);
-  const o = board.getBoundingClientRect();
-  const at = (el) => { const r = el.getBoundingClientRect(); return { x: r.left - o.left, y: r.top - o.top, w: r.width, h: r.height }; };
+  const o = offs(board);
+  const at = (el) => { const r = offs(el); return { x: r.left - o.left, y: r.top - o.top, w: r.width, h: r.height }; };
   const text = (el, str, color, size, spacing, shadow, align = 'left') => {
     const r = at(el);
     g.font = `${size}px "Russo One", sans-serif`;
@@ -2002,7 +2102,8 @@ function drawBoard() {
   c.imageSmoothingQuality = 'high';
   const yc = P + H / 2;
   for (let i = 0; i < W; i++) {
-    const u = 1 - i / (W - 1);
+    // (its outer end the tallest: the right one, or the left on a phone, where it sits top-left)
+    const u = coarse() ? i / (W - 1) : 1 - i / (W - 1);
     const sc = 1 + BOARD_CURVE * (1 - u) * (1 - u);
     c.drawImage(flat, i, 0, 1, H, i, yc - (H / 2) * sc, 1, H * sc);
   }
@@ -2260,6 +2361,18 @@ function frame(t) {
     setShots('odBt', +od.bt.toFixed(3));
     setShots('odWide', wideOn ? 1 : 0);
     setShots('boost', +boost.charge.toFixed(3));
+    touch.rktTapT = Math.max(0, touch.rktTapT - dt);
+    setShots('pads', coarse() && phase === 'play' && !me.dead ? 1 : 0);
+    setShots('joyX', +touch.x.toFixed(3));
+    setShots('joyY', +touch.y.toFixed(3));
+    setShots('joyOn', touch.stickId !== null ? 1 : 0);
+    setShots('fireOn', touch.fire ? 1 : 0);
+    setShots('rktShow', me.rktAmmo > 0 && !me.dead ? 1 : 0);
+    setShots('rktReady', me.rktCd <= 0 ? 1 : 0);
+    setShots('rktFrac', +(me.rktAmmo / ROCKET.ammo).toFixed(3));
+    setShots('rktTap', touch.rktTapT > 0 ? 1 : 0);
+    setShots('nitroOn', boost.on ? 1 : 0);
+    setShots('nitroFrac', +boost.charge.toFixed(3));
     setShots('boostOn', boost.on ? 1 : 0);
     setShots('menuPage', menuPage);
     setShots('soundOn', SETTINGS.sound ? 1 : 0);
@@ -2342,6 +2455,8 @@ if (new URLSearchParams(location.search).has('debug')) {
     fireRocket,
     die() { goDown('shot', 'test', 'TEST'); },
     get menuSel() { return menuSel; },
+    pads: () => padPlaces(),
+    get boostOn() { return boost.on; },
     od,
   };
 }

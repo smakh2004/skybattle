@@ -37,6 +37,18 @@ html, body {
   position: fixed;
   inset: 0;
   overflow: hidden;
+  touch-action: none;
+}
+
+/* a phone held upright where the screen cannot be locked sideways: the game turned a quarter round */
+html.rot #stage {
+  inset: auto;
+  left: 0;
+  top: 0;
+  width: 100vh;
+  height: 100vw;
+  transform-origin: 0 0;
+  transform: rotate(90deg) translateY(-100%);
 }
 
 /* the game at screen size (the camera's turn is drawn inside the Rive files) */
@@ -675,6 +687,7 @@ html, body {
 
 /* touch controls (shown on touch screens only) --------------------------- */
 #stick, #fireBtn, #rocketBtn, #exitBtn { display: none; }
+#stick, #fireBtn, #rocketBtn { display: none !important; } /* (the overlay draws the solo game's pads) */
 
 @media (pointer: coarse) {
   #help { display: none; }
@@ -782,7 +795,7 @@ html, body {
 /* (in the bottom black bar, out of the menu's way) */
 #menu .status {
   position: absolute;
-  left: 15vw;
+  left: 15%;
   bottom: calc(5.5vh - 8px);
   margin: 0;
   z-index: 3;
@@ -791,10 +804,10 @@ html, body {
 #menu { display: block; padding: 0; }
 #menu .showcase {
   position: absolute;
-  left: 52vw;
+  left: 48%;
   top: 0;
   bottom: 0;
-  width: 30vw;
+  width: 38%; /* (the plane a little bigger; % of the game, which may be turned on a phone) */
   display: grid;
   place-items: center;
   pointer-events: none;
@@ -835,3 +848,9 @@ html, body {
 @keyframes cxPulse { 0%, 100% { transform: scale(0.8); opacity: 0.7; } 50% { transform: scale(1); opacity: 1; } }
 @keyframes cxSweep { from { transform: translateX(-110%); } to { transform: translateX(260%); } }
 @keyframes cxBlink { 50% { opacity: 0.55; } }
+
+/* phones: the score table top-left (the right side has the fire / rocket / nitro pads) */
+@media (pointer: coarse) {
+  #hud { justify-content: flex-start; }
+  .board { margin-top: 8px; }
+}

@@ -2472,6 +2472,9 @@ function spawnBot(b) {
   b.burstT = 0;
   b.gunT = 0;
   b.wander = rand(-1, 1);
+  b.charge = 1;
+  b.chargeWait = 0;
+  b.boosting = false;
 }
 function addBots() {
   BOT.names.forEach((name, i) => {
@@ -2528,7 +2531,16 @@ function updateBots(dt) {
     const turn = clamp(wrap(want - b.h), -BOT.turn * dt, BOT.turn * dt);
     b.h = wrap(b.h + turn);
     b.bank += (clamp(turn / (BOT.turn * dt || 1), -1, 1) * 0.8 - b.bank) * ease(5, dt);
-    b.v += ((dist > 900 ? BOT.speed * 1.4 : BOT.speed) - b.v) * ease(1.5, dt);
+    // BOOST, like mine (the same charge, speed and refill): to close in when far behind me, and now
+    // and then to break away after a pass or when badly hurt
+    if (!b.boosting && b.charge > 0.6 && !me.dead && (dist > 850 || (b.hp < 35 && dist < 400) || (dist < BOT.keep && Math.random() < dt * 0.4))) b.boosting = true;
+    if (b.boosting && (b.charge <= 0 || (dist < 500 && b.hp >= 35 && dist > BOT.keep))) b.boosting = false;
+    if (b.boosting) {
+      b.charge = Math.max(0, b.charge - BOOST.drain * dt);
+      b.chargeWait = BOOST.wait;
+    } else if ((b.chargeWait -= dt) <= 0) b.charge = Math.min(1, b.charge + BOOST.refill * dt);
+    const vWant = b.boosting ? BOOST.speed : dist > 900 ? BOT.speed * 1.4 : BOT.speed;
+    b.v += (vWant - b.v) * ease(b.boosting ? BOOST.accel : 1.5, dt);
     b.x += Math.sin(b.h) * b.v * dt;
     b.y -= Math.cos(b.h) * b.v * dt;
     // fire in bursts while I am ahead and near

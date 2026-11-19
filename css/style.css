@@ -409,19 +409,108 @@ html.rot #stage {
 
 #help b { color: var(--ink); }
 
+/* the start-up loader: the game's look - a dark sky with a moving scan grid, the SKY BLITZ title and its
+   pink rule, the plane flying with speed lines, and a slanted segmented bar filling with real progress */
 #loading {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  background: #08466a;
-  font-size: 18px;
-  letter-spacing: 0.2em;
-  transition: opacity 0.4s;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 45%, #0d3550 0%, #061827 55%, #03090f 100%);
+  font-family: "Russo One", sans-serif;
+  color: #f2f6f8;
+  transition: opacity 0.5s ease, visibility 0s linear 0.5s;
   z-index: 10;
 }
-
-#loading.done { opacity: 0; pointer-events: none; }
+#loading.done { opacity: 0; visibility: hidden; pointer-events: none; }
+.ld-grid {
+  position: absolute;
+  inset: -50%;
+  background:
+    linear-gradient(rgba(255, 77, 106, 0.07) 1px, transparent 1px) 0 0 / 46px 46px,
+    linear-gradient(90deg, rgba(110, 220, 255, 0.05) 1px, transparent 1px) 0 0 / 46px 46px;
+  transform: perspective(600px) rotateX(58deg);
+  animation: ldGrid 1.2s linear infinite;
+  mask-image: radial-gradient(ellipse at 50% 40%, #000 20%, transparent 70%);
+}
+@keyframes ldGrid { to { background-position: 0 46px, 0 0; } }
+.ld-box { position: relative; width: min(420px, 80%); text-align: left; }
+.ld-kicker { color: #ff4d6a; font-size: 18px; letter-spacing: 14px; }
+.ld-title {
+  font-size: clamp(54px, 11vw, 92px);
+  line-height: 0.95;
+  transform: skewX(-8deg);
+  text-shadow: 3px 4px 0 rgba(4, 10, 18, 0.8);
+  animation: ldIn 0.7s cubic-bezier(.2, 1.4, .4, 1) both;
+}
+@keyframes ldIn { from { opacity: 0; transform: skewX(-8deg) translateX(-40px); } }
+.ld-rule {
+  height: 3px;
+  margin: 10px 0 0;
+  background: linear-gradient(90deg, #ff4d6a, #ff4d6a 55%, rgba(255, 77, 106, 0));
+  box-shadow: 0 0 10px rgba(255, 77, 106, 0.6);
+}
+.ld-plane {
+  position: relative;
+  height: 96px;
+  margin: 14px 0 6px;
+  display: grid;
+  place-items: center;
+}
+.ld-plane svg {
+  width: 64px;
+  height: 64px;
+  filter: drop-shadow(0 8px 6px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 10px rgba(255, 77, 106, 0.35));
+  animation: ldFly 2.4s ease-in-out infinite;
+}
+@keyframes ldFly {
+  0%, 100% { transform: translate(0, 0) rotate(0); }
+  25% { transform: translate(-14px, -5px) rotate(-6deg); }
+  50% { transform: translate(0, -9px) rotate(0); }
+  75% { transform: translate(14px, -4px) rotate(6deg); }
+}
+.ld-streak {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 48px;
+  border-radius: 2px;
+  background: linear-gradient(rgba(220, 240, 255, 0), rgba(220, 240, 255, 0.7));
+  filter: blur(1px);
+  animation: ldStreak 0.7s linear infinite;
+}
+.ld-streak.s1 { left: 30%; }
+.ld-streak.s2 { left: 62%; animation-delay: 0.25s; height: 64px; }
+.ld-streak.s3 { left: 46%; animation-delay: 0.5s; height: 36px; }
+@keyframes ldStreak { from { transform: translateY(-30px); opacity: 0; } 30% { opacity: 1; } to { transform: translateY(90px); opacity: 0; } }
+.ld-bar {
+  position: relative;
+  height: 16px;
+  padding: 3px;
+  transform: skewX(-20deg);
+  border: 1.5px solid rgba(230, 238, 245, 0.55);
+  background: rgba(11, 18, 26, 0.85);
+}
+.ld-bar i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: repeating-linear-gradient(90deg, #ff4d6a 0 9px, transparent 9px 12px);
+  filter: drop-shadow(0 0 6px rgba(255, 77, 106, 0.8));
+  transition: width 0.35s ease-out;
+}
+.ld-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: rgba(230, 238, 245, 0.75);
+}
+#loadStatus { animation: ldBlink 1s steps(2) infinite; }
+@keyframes ldBlink { 50% { opacity: 0.55; } }
+#loadPct { color: #ff4d6a; }
 
 /* main menu: the game's SKY BLITZ menu ---------------------------------------- */
 #menu {

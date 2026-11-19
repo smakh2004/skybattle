@@ -1859,6 +1859,16 @@ addEventListener('keydown', (e) => {
   }
 });
 
+// the start-up loader's bar and line
+function setLoad(pct, text) {
+  const f = document.getElementById('loadFill');
+  if (f) f.style.width = Math.min(100, pct) + '%';
+  const p = document.getElementById('loadPct');
+  if (p) p.textContent = Math.round(Math.min(100, pct)) + '%';
+  const t = document.getElementById('loadStatus');
+  if (t && text) t.textContent = text;
+}
+
 function setStatus(text, err = false) {
   menuStatus.textContent = text;
   menuStatus.classList.toggle('err', err);
@@ -2398,23 +2408,28 @@ async function boot() {
   } catch {}
   menuSel = nameInput.value ? 2 : 1;
   try {
+    // the loader's bar: each part as it arrives
+    let loaded = 0;
+    const steps = ['LOADING THE SKY', 'LOADING THE HUD', 'FUELLING YOUR PLANE', 'ROLLING OUT', 'READY'];
+    const part = (pr) => pr.then((v) => { loaded += 1; setLoad(15 + loaded * 20, steps[Math.min(loaded, steps.length - 1)]); return v; });
+    setLoad(15, steps[0]);
     const [w, s, mine, showcase] = await Promise.all([
-      loadRive({
+      part(loadRive({
         src: `riv/world.riv?v=${V}`,
         canvas: worldCanvas,
         artboard: 'World',
         enableGPUCanvas: true, // world.luau draws the ocean and clouds with WGSL shaders
         layout: new R.Layout({ fit: R.Fit.Layout }),
-      }),
-      loadRive({
+      })),
+      part(loadRive({
         src: `riv/world.riv?v=${V}`,
         canvas: shotsCanvas,
         artboard: 'Shots',
         enableGPUCanvas: true, // the overlay's GPU liquids and shield bubble
         layout: new R.Layout({ fit: R.Fit.Layout }),
-      }),
-      new PlaneView($('#me')).load(),
-      new PlaneView($('#menuPlane')).load(),
+      })),
+      part(new PlaneView($('#me')).load()),
+      part(new PlaneView($('#menuPlane')).load()),
     ]);
     world = w;
     wvm = w.viewModelInstance;
@@ -2428,7 +2443,8 @@ async function boot() {
     if (menuSel === 1) setTimeout(focusName, 300);
     sfx.music(true);
     saveSettings();
-    $('#loading').classList.add('done');
+    setLoad(100, 'READY');
+    setTimeout(() => $('#loading').classList.add('done'), 250);
     requestAnimationFrame(frame);
     createNet().then((n) => {
       net = net || n;
@@ -2440,7 +2456,7 @@ async function boot() {
     }).catch((e) => console.warn('net', e));
   } catch (e) {
     console.error('boot failed', e && (e.stack || e.message || e));
-    $('#loading').textContent = 'Could not load the Rive files. Serve this folder over http (see README).';
+    setLoad(100, 'COULD NOT LOAD THE GAME - SERVE THIS FOLDER OVER HTTP');
   }
 }
 boot();

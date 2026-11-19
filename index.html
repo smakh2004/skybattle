@@ -8,7 +8,7 @@
   <link rel="icon" href="data:," />
   <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
        browsers load the new files at once instead of a cached copy -->
-  <link rel="stylesheet" href="css/style.css?v=43" />
+  <link rel="stylesheet" href="css/style.css?v=46" />
   <script>
     // Static hosting cannot send the cross-origin isolation headers Rive needs for its threads;
     // coi-sw.js adds them. The first visit installs it and reloads once (never in a loop).
@@ -83,10 +83,27 @@
       <div class="cx-bar"><i></i></div>
       <div class="cx-sub">SYNCING PILOTS · RADAR LINK</div>
     </div>
-    <div id="loading">Loading…</div>
+    <!-- the start-up loader: the game's look (title, plane, a slanted segmented bar), shown at once -->
+    <div id="loading">
+      <div class="ld-grid"></div>
+      <div class="ld-box">
+        <div class="ld-kicker">SKY</div>
+        <div class="ld-title">BLITZ</div>
+        <div class="ld-rule"></div>
+        <div class="ld-plane">
+          <i class="ld-streak s1"></i><i class="ld-streak s2"></i><i class="ld-streak s3"></i>
+          <svg viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M32 4c3 0 5 4 5 9v9l21 6v6l-21-2v14l7 5v4l-12-2-12 2v-4l7-5V36l-21 2v-6l21-6v-9c0-5 2-9 5-9z" fill="#ff4d6a"/>
+            <path d="M32 6c2 0 3 3 3 7v8h-6v-8c0-4 1-7 3-7z" fill="#ffd0d8" opacity=".8"/>
+          </svg>
+        </div>
+        <div class="ld-bar"><i id="loadFill"></i></div>
+        <div class="ld-foot"><span id="loadStatus">STARTING ENGINES</span><span id="loadPct">0%</span></div>
+      </div>
+    </div>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js?v=45"></script>
+  <script type="module" src="js/main.js?v=46"></script>
 </body>
 </html>

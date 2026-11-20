@@ -637,11 +637,29 @@ function addFeed(html) {
 }
 
 // --- my plane --------------------------------------------------------------------------------
+// A spawn point well away from every plane in the air: of several tries, the one farthest from its
+// nearest plane (the first at least SPAWN_GAP away is taken). around: where to look ([x, y], radius).
+const SPAWN_GAP = 1100;
+function clearSpot(self, around) {
+  const planes = [me, ...remotes.values()].filter((o) => o !== self && o.id !== self.id
+    && (o === me ? phase === 'play' && !me.dead : o.seen && !o.dead && !o.gone));
+  for (const b of bots.values()) if (b !== self && !b.dead && !planes.some((o) => o.id === b.id)) planes.push(b);
+  let best = null, bestD = -1;
+  for (let i = 0; i < 24; i++) {
+    const a = Math.random() * Math.PI * 2, r = around[2] * Math.sqrt(Math.random());
+    const x = around[0] + Math.cos(a) * r, y = around[1] + Math.sin(a) * r;
+    let d = Infinity;
+    for (const o of planes) d = Math.min(d, Math.hypot(o.x - x, o.y - y));
+    if (d > bestD) { best = [x, y]; bestD = d; }
+    if (d >= SPAWN_GAP) break;
+  }
+  return best;
+}
+
 function spawn(p) {
-  const a = Math.random() * Math.PI * 2;
-  const r = Math.sqrt(Math.random()) * SPAWN_R();
-  p.x = Math.cos(a) * r;
-  p.y = Math.sin(a) * r;
+  const [sx, sy] = clearSpot(p, [0, 0, SPAWN_R() + 600]);
+  p.x = sx;
+  p.y = sy;
   p.heading = Math.atan2(-p.x, p.y) + rand(-0.5, 0.5); // roughly toward the middle
   p.speed = FLIGHT.cruise;
   p.turn = p.bank = p.pitch = 0;
@@ -2542,7 +2560,7 @@ function screenFx(dt) {
 // They are fed in exactly like other players' network updates (onPlayers), so they fly, fire, burn,
 // fall and appear on the board like anyone; their hits on me and mine on them are settled here.
 // A real pilot joining sends them off; alone again, they come back.
-const BOT = { names: ['MAVERICK', 'ICEMAN'], maxPlayers: 2, avoid: 320, alone: 2.5, speed: 160, turn: 1.6, range: 620, cone: 0.2,
+const BOT = { names: ['MAVERICK', 'ICEMAN', 'RED BARON', 'GOOSE', 'VIPER', 'PHOENIX', 'ROOSTER', 'HANGMAN', 'JESTER', 'COYOTE'], maxPlayers: 2, avoid: 320, alone: 2.5, speed: 160, turn: 1.6, range: 620, cone: 0.2,
   burst: [0.9, 1.6], rest: [1.2, 2.6], gap: 0.28, respawn: 3.5, keep: 320, hpLoss: 0 };
 const bots = new Map(); // id -> state
 let realPlayers = {};
@@ -2571,9 +2589,10 @@ function netPlayers(all) {
   onPlayers(withBots(all));
 }
 function spawnBot(b) {
-  const a = Math.random() * Math.PI * 2, d = rand(700, 1100);
-  b.x = me.x + Math.cos(a) * d;
-  b.y = me.y + Math.sin(a) * d;
+  // (near enough to join the fight, never on top of anyone)
+  const [sx, sy] = clearSpot(b, [me.x, me.y, 3400]);
+  b.x = sx;
+  b.y = sy;
   b.h = Math.atan2(me.x - b.x, -(me.y - b.y)) + rand(-0.6, 0.6);
   b.v = BOT.speed;
   b.bank = 0;
@@ -2595,9 +2614,9 @@ function spawnBot(b) {
 }
 function addBots() {
   BOT.names.forEach((name, i) => {
-    const id = 'bot-' + name.toLowerCase();
+    const id = 'bot-' + name.toLowerCase().replace(/\s+/g, '-');
     if (bots.has(id)) return;
-    const b = { id, name, hue: HUES[(i * 5 + 3) % HUES.length], shots: 0, score: 0 };
+    const b = { id, name, hue: HUES[(i * 7 + 1) % HUES.length], shots: 0, score: 0 }; // (each its own colour)
     spawnBot(b);
     bots.set(id, b);
   });
@@ -2644,7 +2663,7 @@ function botTarget(b, dt) {
   const cands = [me, ...players, ...[...bots.values()].filter((o) => o !== b)];
   for (const t of cands) {
     if (!ok(t)) continue;
-    const d = Math.hypot(t.x - b.x, t.y - b.y) * (t === me ? 0.8 : 1);
+    const d = Math.hypot(t.x - b.x, t.y - b.y); // (with ten of them: no favourite)
     if (d < bestD) { best = t; bestD = d; }
   }
   b.target = best;

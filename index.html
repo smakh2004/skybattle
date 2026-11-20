@@ -8,7 +8,7 @@
   <link rel="icon" href="data:," />
   <!-- ?v=N on css/js (and, through main.js, on the .riv files): bump it with every update so
        browsers load the new files at once instead of a cached copy -->
-  <link rel="stylesheet" href="css/style.css?v=96" />
+  <link rel="stylesheet" href="css/style.css?v=99" />
   <script>
     // Static hosting cannot send the cross-origin isolation headers Rive needs for its threads;
     // coi-sw.js adds them. The first visit installs it and reloads once (never in a loop).
@@ -40,6 +40,15 @@
 
     <!-- name tags over the other planes, arrows to players off screen -->
     <div id="tags" aria-hidden="true"></div>
+    <!-- the first flight's lessons (main.js TUT) -->
+    <div id="tut" aria-live="polite">
+      <div class="tut-plate">
+        <span class="tut-step" id="tutStep">01</span><span class="tut-div"></span>
+        <span class="tut-text"><b id="tutTitle">FIRE</b><small id="tutHint">HOLD SPACE</small></span>
+        <button class="tut-skip" id="tutSkip" type="button">SKIP ›</button>
+      </div>
+      <div class="tut-bar"><i id="tutFill"></i></div>
+    </div>
     <!-- the red glow at the screen's edges: a hit's flash, and the alarm while on fire -->
     <div id="alarm" aria-hidden="true"></div>
     <!-- the radar (top left): other players and power-ups around me, turned with the camera -->
@@ -107,6 +116,6 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2-threads@2.50.0/rive.js" crossorigin></script>
-  <script type="module" src="js/main.js?v=97"></script>
+  <script type="module" src="js/main.js?v=99"></script>
 </body>
 </html>

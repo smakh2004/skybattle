@@ -639,7 +639,7 @@ function addFeed(html) {
 // --- my plane --------------------------------------------------------------------------------
 // A spawn point well away from every plane in the air: of several tries, the one farthest from its
 // nearest plane (the first at least SPAWN_GAP away is taken). around: where to look ([x, y], radius).
-const SPAWN_GAP = 1100;
+const SPAWN_GAP = 1800;
 function clearSpot(self, around) {
   const planes = [me, ...remotes.values()].filter((o) => o !== self && o.id !== self.id
     && (o === me ? phase === 'play' && !me.dead : o.seen && !o.dead && !o.gone));
@@ -657,7 +657,7 @@ function clearSpot(self, around) {
 }
 
 function spawn(p) {
-  const [sx, sy] = clearSpot(p, [0, 0, SPAWN_R() + 600]);
+  const [sx, sy] = clearSpot(p, [0, 0, SPAWN_R() + 1800]);
   p.x = sx;
   p.y = sy;
   p.heading = Math.atan2(-p.x, p.y) + rand(-0.5, 0.5); // roughly toward the middle
@@ -1115,7 +1115,7 @@ function updateBullets(dt) {
         if (p.shielded || p.spawnShield > 0) break;
         if (p === me && isBot(b.owner)) onHit({ by: b.owner, dmg: GUN.dmg });
         else if (isBot(b.owner) && isBot(p.id)) hitBot(p.id, GUN.dmg, false, b.owner);
-        if (b.mine && p !== me) {
+        if (b.mine && p !== me && !(tut.on && !isBot(p.id))) {
           sfx.play('hit_enemy');
           hitPlayer(p.id, b.dmg);
           if (od.t <= 0) od.meter = Math.min(1, od.meter + OD.hit);
@@ -2251,6 +2251,7 @@ async function joinGame() {
   stage.dataset.phase = 'play';
   boardT = 0;
   setTimeout(() => { if (phase === 'play') showBanner('SHOOT THEM DOWN', 'SKY ARENA'); }, 450);
+  tutStart();
   net.send(myState());
 }
 
@@ -2674,7 +2675,7 @@ function hitPlayer(id, dmg, crash = false) {
   if (isBot(id)) {
     if (bots.has(id)) hitBot(id, dmg, crash, session ? session.id : null);
     else if (botOwner.has(id)) net && net.hit(botOwner.get(id), dmg, crash, id);
-  } else net && net.hit(id, dmg, crash);
+  } else if (!tut.on) net && net.hit(id, dmg, crash); // (not while learning)
 }
 // a bot I run went down: to everyone's feed (and my own onKill) through the network
 function reportBotKill(k) {
@@ -2780,6 +2781,82 @@ function updateBots(dt) {
   if (botSendT <= 0) { botSendT = 1 / SEND_HZ; onPlayers(withBots(realPlayers)); }
 }
 
+// --- the first flight's lessons: fire, boost, the wide view, rockets (with free ones) -----------------
+// Shown once (remembered on this device). While learning, the new pilot is shielded and its bullets,
+// rockets and rams do not touch real players (bots only) - nobody already playing is affected.
+const TUT_STEPS = () => [
+  { title: 'FIRE', hint: TOUCH ? 'HOLD THE FIRE BUTTON' : 'HOLD SPACE (OR THE MOUSE)', need: 1.2 },
+  { title: 'BOOST', hint: TOUCH ? 'HOLD THE NITRO BUTTON' : 'HOLD E', need: 0.9 },
+  { title: 'WIDE VIEW', hint: TOUCH ? 'DOUBLE-TAP THE SCREEN' : 'PRESS V', need: 1 },
+  { title: 'ROCKETS', hint: TOUCH ? 'FREE ROCKETS: TAP THE ROCKET BUTTON' : 'FREE ROCKETS: PRESS Q', need: 1 },
+];
+const tut = { on: false, step: 0, prog: 0, doneT: 0, shots: 0, rockets: 0, wide: false };
+let tutDone = false;
+try { tutDone = localStorage.getItem('skyblitz.tutorial') === '1'; } catch {}
+const tutEl = document.getElementById('tut');
+function tutShow() {
+  const st = TUT_STEPS()[tut.step];
+  if (!st) return;
+  document.getElementById('tutStep').textContent = String(tut.step + 1).padStart(2, '0');
+  document.getElementById('tutTitle').textContent = st.title;
+  document.getElementById('tutHint').textContent = st.hint;
+  document.getElementById('tutFill').style.width = '0%';
+  tutEl.classList.remove('done', 'pop');
+  void tutEl.offsetWidth;
+  tutEl.classList.add('on', 'pop');
+  if (tut.step === 3 && me.rktAmmo <= 0) {
+    // the free rockets (the usual pick-up: its burst, the NEW WEAPON showcase, the panel)
+    takePickup({ id: pickupId++, kind: KIND.rockets, x: me.x, y: me.y, t: 0 });
+  }
+  tut.prog = 0;
+  tut.shots = me.shots;
+  tut.rockets = me.rockets || 0;
+  tut.wide = false;
+}
+function tutStart() {
+  if (tutDone) return;
+  tut.on = true;
+  tut.step = 0;
+  setTimeout(() => { if (tut.on && phase === 'play') tutShow(); }, 3300); // (after the SKY ARENA banner)
+}
+function tutFinish(skipped) {
+  tut.on = false;
+  tutDone = true;
+  try { localStorage.setItem('skyblitz.tutorial', '1'); } catch {}
+  tutEl.classList.remove('on');
+  if (!skipped) { sfx.play('ui_start'); showBanner('GOOD LUCK, PILOT', "YOU'RE READY"); }
+}
+document.getElementById('tutSkip').addEventListener('click', (e) => { e.stopPropagation(); tutFinish(true); });
+document.getElementById('tutSkip').addEventListener('pointerdown', (e) => e.stopPropagation());
+function updateTutorial(dt) {
+  if (!tut.on) return;
+  if (phase !== 'play') { tutEl.classList.remove('on'); return; }
+  // (learning: shielded - no one can hit it, and it shows as shielded to the others)
+  me.spawnShield = Math.max(me.spawnShield, 0.3);
+  if (!tutEl.classList.contains('on')) return;
+  if (tut.doneT > 0) {
+    tut.doneT -= dt;
+    if (tut.doneT <= 0) {
+      tut.step += 1;
+      if (tut.step >= TUT_STEPS().length) tutFinish(false);
+      else tutShow();
+    }
+    return;
+  }
+  const st = TUT_STEPS()[tut.step];
+  if (tut.step === 0 && me.shots > tut.shots) tut.prog += dt * (input.fire ? 1 : 0);
+  else if (tut.step === 1 && boost.on) tut.prog += dt;
+  else if (tut.step === 2 && wideT > 0) tut.prog = st.need;
+  else if (tut.step === 3 && (me.rockets || 0) > tut.rockets) tut.prog = st.need;
+  const f = Math.min(1, tut.prog / st.need);
+  document.getElementById('tutFill').style.width = (f * 100).toFixed(1) + '%';
+  if (f >= 1) {
+    tut.doneT = 0.7;
+    tutEl.classList.add('done');
+    sfx.play('ui_press');
+  }
+}
+
 function frame(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0);
   if (lastT) watchFrames(t - lastT);
@@ -2791,6 +2868,7 @@ function frame(t) {
     readInput();
     fly(me, dt, input);
     updateBots(dt);
+    updateTutorial(dt);
     updateRemotes(dt);
     cullViews();
     checkCollisions();

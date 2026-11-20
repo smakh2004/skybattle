@@ -1029,3 +1029,60 @@ html.touch #hud { transform: scale(0.58); }
 html.touch #radar { width: 104px; height: 104px; }
 html.touch #feed { left: 124px; }
 }
+
+/* the first flight's lessons: the menu's slanted plate - the step number, what to do, a progress line */
+#tut {
+  position: absolute;
+  left: 50%;
+  top: 30%;
+  width: min(440px, 78%);
+  transform: translateX(-50%);
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  font-family: "Russo One", sans-serif;
+  color: #f2f6f8;
+}
+#tut.on { opacity: 1; }
+#tut.done .tut-plate::after { background: linear-gradient(90deg, #ff4d6a, #ff6f86); }
+.tut-plate {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 58px;
+  padding: 0 26px 0 30px;
+  isolation: isolate;
+}
+.tut-plate::before, .tut-plate::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  clip-path: polygon(5% 0, 100% 0, 95% 100%, 0 100%);
+}
+.tut-plate::before { inset: 0; background: rgba(230, 238, 245, 0.6); }
+.tut-plate::after { inset: 1.5px; background: linear-gradient(90deg, rgba(11, 18, 26, 0.94), rgba(11, 18, 26, 0.78)); transition: background 0.25s; }
+.tut-step { font-size: 12px; opacity: 0.65; }
+.tut-div { width: 1.5px; height: 22px; background: rgba(242, 246, 248, 0.5); transform: skewX(-14deg); }
+.tut-text { flex: 1; display: flex; flex-direction: column; gap: 2px; line-height: 1.1; }
+.tut-text b { font-weight: normal; font-size: 19px; letter-spacing: 2px; text-shadow: 1px 2px 0 rgba(6, 12, 18, 0.7); }
+.tut-text small { font-size: 11px; letter-spacing: 2px; color: #ff4d6a; }
+.tut-skip {
+  pointer-events: auto;
+  border: 0;
+  background: none;
+  color: rgba(230, 238, 245, 0.7);
+  font: 11px "Russo One", sans-serif;
+  letter-spacing: 2px;
+  cursor: pointer;
+  padding: 8px 0 8px 8px;
+}
+.tut-bar { height: 4px; margin: 8px 22px 0; transform: skewX(-20deg); background: rgba(230, 238, 245, 0.15); }
+.tut-bar i { display: block; height: 100%; width: 0; background: #ff4d6a; box-shadow: 0 0 10px rgba(255, 77, 106, 0.8); transition: width 0.2s ease-out; }
+#tut.pop .tut-plate { animation: tutPop 0.45s cubic-bezier(.2, 1.4, .4, 1); }
+@keyframes tutPop { from { transform: translateY(-14px) scale(0.92); opacity: 0; } }
+#stage[data-phase="menu"] #tut, #stage[data-phase="joining"] #tut { display: none; }
+html.touch #tut { top: 27%; width: min(360px, 60%); }
+html.touch .tut-plate { height: 46px; }
+html.touch .tut-text b { font-size: 15px; }

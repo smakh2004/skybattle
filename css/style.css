@@ -1034,7 +1034,7 @@ html.touch #feed { left: 124px; }
 #tut {
   position: absolute;
   left: 50%;
-  top: 30%;
+  top: 21%;
   width: min(440px, 78%);
   transform: translateX(-50%);
   z-index: 4;
@@ -1083,6 +1083,6 @@ html.touch #feed { left: 124px; }
 #tut.pop .tut-plate { animation: tutPop 0.45s cubic-bezier(.2, 1.4, .4, 1); }
 @keyframes tutPop { from { transform: translateY(-14px) scale(0.92); opacity: 0; } }
 #stage[data-phase="menu"] #tut, #stage[data-phase="joining"] #tut { display: none; }
-html.touch #tut { top: 27%; width: min(360px, 60%); }
+html.touch #tut { top: 19%; width: min(360px, 60%); }
 html.touch .tut-plate { height: 46px; }
 html.touch .tut-text b { font-size: 15px; }

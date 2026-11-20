@@ -2236,7 +2236,8 @@ async function joinGame() {
   }
   setStatus('');
   if (document.activeElement === nameInput) nameInput.blur();
-  me.score = 0;
+  me.score = loadScore(name); // (where this pilot left off, on this device)
+  savedScore = me.score;
   me.shots = me.podShots = me.rockets = 0;
   me.gunT = 0;
   bullets.length = 0;
@@ -2257,6 +2258,7 @@ async function joinGame() {
 
 async function leaveGame() {
   if (phase !== 'play') return;
+  saveScore();
   phase = 'menu';
   sfx.music(false);
   stage.dataset.phase = 'menu';
@@ -2857,6 +2859,21 @@ function updateTutorial(dt) {
   }
 }
 
+// --- the score kept on this device, per pilot name: leaving, closing the tab or coming back later,
+// the pilot carries on from it (it shows on the board as before)
+function scoreKey(name) { return 'skyblitz.score.' + cleanName(name); }
+function loadScore(name) {
+  try { return Math.max(0, Math.floor(+localStorage.getItem(scoreKey(name)) || 0)); } catch { return 0; }
+}
+let savedScore = -1;
+function saveScore() {
+  if (!me.name || savedScore === me.score) return;
+  savedScore = me.score;
+  try { localStorage.setItem(scoreKey(me.name), String(Math.floor(me.score))); } catch {}
+}
+addEventListener('pagehide', saveScore);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveScore(); });
+
 function frame(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0);
   if (lastT) watchFrames(t - lastT);
@@ -2890,6 +2907,7 @@ function frame(t) {
       net.send(myState());
     }
     updateBoard(dt);
+    saveScore(); // (only writes when it changed)
   } else {
     // the menu: a real player flying, live (or, with nobody online, the camera drifts over the sea
     // and the showcase plane sways and fires now and then)

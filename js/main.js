@@ -1620,15 +1620,24 @@ function updateBoard(dt) {
   boardT = 0.25;
   const rows = [{ id: 'me', name: me.name, score: me.score, me: true }];
   for (const r of remotes.values()) if (r.seen) rows.push({ id: r.id, name: r.name, score: r.score });
+  const online = rows.length;
+  // the saved scores of pilots not in the air now (kept after they leave): dimmed on the board
+  const here = new Set(rows.map((r) => r.name));
+  for (const t of savedTop) {
+    const n = cleanName(t.n);
+    if (!n || here.has(n) || !(t.s > 0)) continue;
+    here.add(n);
+    rows.push({ id: 'saved-' + n, name: n, score: Math.floor(t.s), off: true });
+  }
   rows.sort((a, b) => b.score - a.score || (a.me ? -1 : 1));
   rows.forEach((r, i) => { r.rank = i + 1; });
-  const count = `${rows.length} ONLINE`;
+  const count = `${online} ONLINE`;
   if ($('#boardCount').textContent !== count) $('#boardCount').textContent = count;
   const shown = rows.slice(0, BOARD_ROWS);
   const mine = rows.find((r) => r.me);
   if (mine.rank > BOARD_ROWS) shown.push(mine);
   const html = shown.map((r) =>
-    `<li class="${r.rank === 1 ? 'first' : ''} ${r.me ? 'me' : ''}"><span class="rank">${String(r.rank).padStart(2, '0')}</span><span class="div"></span>` +
+    `<li class="${r.rank === 1 ? 'first' : ''} ${r.me ? 'me' : ''} ${r.off ? 'off' : ''}"><span class="rank">${String(r.rank).padStart(2, '0')}</span><span class="div"></span>` +
     `<span class="name">${esc(r.name)}${r.me ? ' (YOU)' : ''}</span><span class="pts">${r.score}</span></li>`).join('');
   // (only when it changed: the curved table is redrawn from it)
   if (html !== lastBoard) { $('#boardList').innerHTML = html; lastBoard = html; boardRect = null; }
@@ -2182,8 +2191,9 @@ function drawBoard() {
     g.fillRect(-dr.w / 2, -dr.h / 2, dr.w, dr.h);
     g.restore();
     const meRow = li.classList.contains('me') && !first;
-    text(name, name.textContent, meRow ? '#ff4d6a' : '#f2f6f8', 13, 1.2, true);
-    text(pts, pts.textContent, '#f2f6f8', 13, 1.2, true, 'right');
+    const off = li.classList.contains('off'); // (left the game: dimmed)
+    text(name, name.textContent, meRow ? '#ff4d6a' : off ? 'rgba(242, 246, 248, 0.5)' : '#f2f6f8', 13, 1.2, true);
+    text(pts, pts.textContent, off ? 'rgba(242, 246, 248, 0.5)' : '#f2f6f8', 13, 1.2, true, 'right');
   }
   // bent: one column at a time, stretched about the middle; the canvas covers the table plus room
   // above and below for the taller end
@@ -2225,6 +2235,7 @@ async function joinGame() {
     net.onPlayers = netPlayers;
     net.onHit = onHit;
     net.onKill = onKill;
+    net.onScores = (list) => { savedTop = list || []; };
     me.name = name;
     session = await net.join({ name, plane: 1 });
   } catch (e) {
@@ -2258,7 +2269,7 @@ async function joinGame() {
 
 async function leaveGame() {
   if (phase !== 'play') return;
-  saveScore();
+  saveScore(true);
   phase = 'menu';
   sfx.music(false);
   stage.dataset.phase = 'menu';
@@ -2866,13 +2877,21 @@ function loadScore(name) {
   try { return Math.max(0, Math.floor(+localStorage.getItem(scoreKey(name)) || 0)); } catch { return 0; }
 }
 let savedScore = -1;
-function saveScore() {
+let topSentT = 0, topSent = -1;
+function saveScore(force = false) {
+  // (the shared board: every 3 s at most while it changes, at once when leaving)
+  if (net && net.putScore && me.name && me.score !== topSent && (force || performance.now() - topSentT > 3000)) {
+    topSentT = performance.now();
+    topSent = me.score;
+    net.putScore(me.name, me.score);
+  }
   if (!me.name || savedScore === me.score) return;
   savedScore = me.score;
   try { localStorage.setItem(scoreKey(me.name), String(Math.floor(me.score))); } catch {}
 }
-addEventListener('pagehide', saveScore);
-document.addEventListener('visibilitychange', () => { if (document.hidden) saveScore(); });
+addEventListener('pagehide', () => saveScore(true));
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveScore(true); });
+let savedTop = []; // the saved board (net.onScores)
 
 function frame(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0);
@@ -3125,6 +3144,7 @@ async function boot() {
       net.onPlayers = netPlayers;
       net.onHit = onHit;
       net.onKill = onKill;
+    net.onScores = (list) => { savedTop = list || []; };
       if (net.mode === 'local') setStatus('OFFLINE TEST MODE · OPEN MORE WINDOWS TO PLAY TOGETHER');
     }).catch((e) => console.warn('net', e));
   } catch (e) {

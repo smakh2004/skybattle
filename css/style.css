@@ -1086,3 +1086,5 @@ html.touch #feed { left: 124px; }
 html.touch #tut { top: 19%; width: min(360px, 60%); }
 html.touch .tut-plate { height: 46px; }
 html.touch .tut-text b { font-size: 15px; }
+
+#boardList li.off .name, #boardList li.off .pts { opacity: 0.5; } /* (left the game) */

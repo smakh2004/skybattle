@@ -34,6 +34,7 @@ export async function createNet() {
 // --- Firebase -------------------------------------------------------------------------------
 class FirebaseNet {
   constructor(config) {
+    this.onScores = () => {};
     this.config = config;
     this.mode = 'online';
     this.onPlayers = () => {};
@@ -112,11 +113,23 @@ class FirebaseNet {
       const v = snap.val();
       if (v && v.t > since) this.onKill(v);
     }));
+    // the saved scores: the best 30, kept after their pilots leave (for the board)
+    this.offs.push(onValue(query(ref(d, `${ARENA}/scores`), db.orderByChild('s'), limitToLast(30)), (snap) => {
+      const all = snap.val() || {};
+      this.onScores(Object.values(all));
+    }));
     return { id: uid, label: 'ONLINE' };
   }
 
   send(state) {
     if (this.meRef) this.db.set(this.meRef, { ...state, t: Date.now() });
+  }
+
+  // my score, kept on the board after I leave (under my name)
+  putScore(name, s) {
+    if (!this.meRef || !name) return;
+    const key = name.replace(/[^A-Z0-9]/gi, '_');
+    this.db.set(this.db.ref(this.database, `${ARENA}/scores/${key}`), { n: name, s: Math.floor(s), t: Date.now() });
   }
 
   hit(to, dmg, crash = false, bot = null) {
@@ -168,6 +181,7 @@ class LocalNet {
     this.onPlayers = () => {};
     this.onHit = () => {};
     this.onKill = () => {};
+    this.onScores = () => {};
     this.ch.onmessage = (e) => this.receive(e.data);
     this.timer = setInterval(() => this.sweep(), 1000);
     addEventListener('pagehide', () => this.leave());
@@ -183,6 +197,8 @@ class LocalNet {
       this.emit();
     } else if (m.type === 'hit' && m.to === this.id) {
       this.onHit({ by: m.from, dmg: m.dmg, crash: !!m.crash, bot: m.bot || null });
+    } else if (m.type === 'scores') {
+      this.emitScores();
     } else if (m.type === 'kill') {
       this.onKill(m.kill);
     }
@@ -213,7 +229,24 @@ class LocalNet {
     this.joined = true;
     this.send({ n: name, p: plane, x: 0, y: 0, h: 0, v: 0, b: 0, q: 0, f: 0, d: false, u: false, i: true, a: 100, s: 0 });
     this.emit();
+    this.emitScores();
     return { id: this.id, label: 'OFFLINE TEST' };
+  }
+
+  putScore(name, s) {
+    if (!name) return;
+    let all = {};
+    try { all = JSON.parse(localStorage.getItem('skyblitz.localTop') || '{}'); } catch {}
+    all[name] = { n: name, s: Math.floor(s), t: Date.now() };
+    try { localStorage.setItem('skyblitz.localTop', JSON.stringify(all)); } catch {}
+    this.ch.postMessage({ type: 'scores', from: this.id });
+    this.emitScores();
+  }
+
+  emitScores() {
+    let all = {};
+    try { all = JSON.parse(localStorage.getItem('skyblitz.localTop') || '{}'); } catch {}
+    this.onScores(Object.values(all));
   }
 
   send(state) {
